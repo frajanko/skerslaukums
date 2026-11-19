@@ -49,6 +49,39 @@ function flash(text, color) {
   flashTimer = setTimeout(() => el.classList.remove('show'), 450);
 }
 
+// ---------- Dialogi ----------
+// Sistēmas confirm/alert/prompt iOS aptur kameras video, kas pēc tam paliek
+// sastindzis, tāpēc izmantojam pašu logu lapas iekšienē.
+function dialog({ title = '', text = '', fields = [], ok = 'Labi', cancel = 'Atcelt', danger = false }) {
+  return new Promise((resolve) => {
+    const root = $('#dialog');
+    root.innerHTML = `<div class="dlg" role="dialog" aria-modal="true">
+      ${title ? `<h3>${esc(title)}</h3>` : ''}
+      ${text ? `<p>${esc(text).replace(/\n/g, '<br>')}</p>` : ''}
+      ${fields.map((f) => `<label>${esc(f.label)}<input type="${f.type || 'text'}"${f.inputmode ? ` inputmode="${f.inputmode}"` : ''} value="${esc(f.value ?? '')}"></label>`).join('')}
+      <div class="dlg-btns">
+        ${cancel ? `<button class="btn ghost" data-r="0">${esc(cancel)}</button>` : ''}
+        <button class="btn ${danger ? 'danger' : 'one'}" data-r="1">${esc(ok)}</button>
+      </div></div>`;
+    root.classList.remove('hidden');
+    const finish = (yes) => {
+      const vals = [...root.querySelectorAll('input')].map((i) => i.value);
+      root.classList.add('hidden');
+      root.innerHTML = '';
+      root.onclick = root.onkeydown = null;
+      lastFrameT = performance.now();
+      resolve(fields.length ? (yes ? vals : null) : yes);
+    };
+    root.onclick = (e) => {
+      const b = e.target.closest('[data-r]');
+      if (b) finish(b.dataset.r === '1');
+    };
+    root.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(true); } };
+  });
+}
+const ask = (text, opts = {}) => dialog({ text, ...opts });
+const tell = (text) => dialog({ text, cancel: '' });
+
 // ---------- Sensori ----------
 const sensor = { pitch: null, heading: null, pos: null };
 
@@ -111,16 +144,47 @@ async function startCamera() {
     video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
   });
   video.srcObject = stream;
+  const track = stream.getVideoTracks()[0];
+  if (track) track.addEventListener('unmute', () => video.play().catch(() => {}));
   await video.play();
+  lastFrameT = performance.now();
 }
 
-document.addEventListener('visibilitychange', async () => {
+// Kameras uzraugs: ja video apstājies vai kadri vairs nenāk (iOS to dara pēc
+// sistēmas logiem, zvaniem, Control Center u.c.), atsāk atskaņošanu vai kameru.
+let lastFrameT = performance.now();
+let lastPlayTry = 0, lastRestart = 0, restarting = false, framesSeen = false;
+if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+  const onVF = () => { lastFrameT = performance.now(); framesSeen = true; video.requestVideoFrameCallback(onVF); };
+  video.requestVideoFrameCallback(onVF);
+} else {
+  video.addEventListener('timeupdate', () => { lastFrameT = performance.now(); framesSeen = true; });
+}
+video.addEventListener('pause', () => { if (state.running) video.play().catch(() => {}); });
+
+async function ensureVideo() {
+  if (!state.running || restarting || document.visibilityState !== 'visible') return;
+  const now = performance.now();
+  const track = stream && stream.getVideoTracks()[0];
+  // Kadru plūsmai uzticamies tikai tad, ja tā vispār ir strādājusi.
+  const stall = framesSeen ? now - lastFrameT : 0;
+  if (!track || track.readyState === 'ended' || (stall > 3000 && now - lastRestart > 5000)) {
+    restarting = true;
+    lastRestart = now;
+    try { await startCamera(); } catch { /* mēģinās vēlreiz pēc 5 s */ }
+    lastFrameT = performance.now();
+    restarting = false;
+  } else if ((video.paused || stall > 700) && now - lastPlayTry > 1000) {
+    lastPlayTry = now;
+    video.play().catch(() => {});
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !state.running) return;
   keepAwake();
-  const track = stream && stream.getVideoTracks()[0];
-  if (!track || track.readyState === 'ended') {
-    try { await startCamera(); } catch { /* lietotājs redzēs melnu ekrānu */ }
-  }
+  lastFrameT = performance.now();
+  ensureVideo();
 });
 
 // ---------- Stāvoklis ----------
@@ -191,6 +255,7 @@ function resizeCanvas() {
 function frame() {
   requestAnimationFrame(frame);
   if (!state.running || state.panel) return;
+  ensureVideo();
   resizeCanvas();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
@@ -313,19 +378,20 @@ function endCalib() {
   renderAll();
 }
 
-function saveCalib() {
+async function saveCalib() {
   const g = geom();
-  if (!g) { alert('Kamera vēl nav gatava.'); return; }
+  if (!g) { await tell('Kamera vēl nav gatava.'); return; }
   const p = Math.abs(state.calib.x2 - state.calib.x1);
   const Wm = parseNum($('#cW').value) / 100;
   const D = parseNum($('#cD').value);
-  if (!(Wm > 0) || !(D > 0) || p < 10) { alert('Pārbaudi platumu, attālumu un līniju novietojumu.'); return; }
+  if (!(Wm > 0) || !(D > 0) || p < 10) { await tell('Pārbaudi platumu, attālumu un līniju novietojumu.'); return; }
   const F = C.focalFromCalibration(p, Wm, D);
   const fLong = F / (Math.max(g.vw, g.vh) * g.S);
   const hfov = hfovDeg(fLong, g.vw, g.vh);
   if (fLong < 0.35 || fLong > 1.8) {
-    if (!confirm(`Rezultāts izskatās neparasts (redzes leņķis ${fmt(hfov, 1)}°). Saglabāt tik un tā?`)) return;
+    if (!(await ask(`Rezultāts izskatās neparasts (redzes leņķis ${fmt(hfov, 1)}°). Saglabāt tik un tā?`, { ok: 'Saglabāt' }))) return;
   }
+  if (!state.calib) return;
   settings.fLong = fLong;
   settings.calib = { t: Date.now(), vLong: Math.max(g.vw, g.vh), vShort: Math.min(g.vw, g.vh), widthCm: Wm * 100, distM: D, px: p, zoom: settings.zoom };
   saveSettings();
@@ -340,14 +406,14 @@ function hfovDeg(fLong, vw, vh) {
 // ---------- Skaitīšana ----------
 // BAF nosaka skaitīšanas leņķi, tāpēc jau saskaitītos kokus nevar pārrēķināt
 // uz citu BAF — mainot BAF laukuma vidū, skaitīšana jāsāk no jauna.
-function setBaf(b) {
+async function setBaf(b) {
   if (b === settings.baf) return true;
   const n = C.totalCount(cur.counts);
   if (n > 0) {
-    const ok = confirm(
+    const ok = await ask(
       `Šajā laukumā jau saskaitīti ${fmtN(n)} koki ar BAF ${settings.baf}.\n\n` +
-      `Ar BAF ${b} ir cits skaitīšanas leņķis, tāpēc koki jāpārskaita no jauna.\n\n` +
-      'Nodzēst pašreizējo skaitījumu un mainīt BAF?',
+      `Ar BAF ${b} ir cits skaitīšanas leņķis, tāpēc koki jāpārskaita no jauna.`,
+      { title: `Mainīt uz BAF ${b}?`, ok: 'Nodzēst un mainīt', danger: true },
     );
     if (!ok) return false;
     cur.counts = {};
@@ -383,23 +449,28 @@ function undo() {
   flash(`−${v === 0.5 ? '½' : '1'} ${spName(sp)}`, '#ff6b6b');
 }
 
-function editMeta() {
-  const s = prompt('Nogabala numurs / nosaukums', cur.stand);
-  if (s === null) return;
-  const n = prompt('Laukuma numurs', String(cur.no));
-  if (n === null) return;
-  cur.stand = s.trim() || cur.stand;
-  const no = parseInt(n, 10);
+async function editMeta() {
+  const r = await dialog({
+    title: 'Laukuma dati',
+    fields: [
+      { label: 'Nogabala numurs / nosaukums', value: cur.stand },
+      { label: 'Laukuma numurs', value: String(cur.no), type: 'number', inputmode: 'numeric' },
+    ],
+    ok: 'Saglabāt',
+  });
+  if (!r) return;
+  cur.stand = r[0].trim() || cur.stand;
+  const no = parseInt(r[1], 10);
   if (no > 0) cur.no = no;
   saveCur();
   renderBottom();
 }
 
-function savePlot() {
+async function savePlot() {
   const n = C.totalCount(cur.counts);
   const cov = cur.cover.length * 5;
-  if (n === 0 && !confirm('Nav saskaitīts neviens koks. Saglabāt laukumu ar G = 0?')) return;
-  if (sensor.heading != null && cov < 300 && !confirm(`Apgriezts tikai ~${cov}°. Saglabāt tik un tā?`)) return;
+  if (n === 0 && !(await ask('Nav saskaitīts neviens koks. Saglabāt laukumu ar G = 0?', { ok: 'Saglabāt' }))) return;
+  if (sensor.heading != null && cov < 300 && !(await ask(`Apgriezts tikai ~${cov}°. Saglabāt tik un tā?`, { ok: 'Saglabāt' }))) return;
   const pos = sensor.pos && Date.now() - sensor.pos.t < 180000 ? sensor.pos : null;
   const plot = {
     id: Date.now(), stand: cur.stand, no: cur.no, t: Date.now(), baf: settings.baf,
@@ -465,6 +536,7 @@ function openPanel(tab) {
 }
 function closePanel() {
   state.panel = false;
+  lastFrameT = performance.now();
   $('#panel').classList.add('hidden');
   renderAll();
 }
@@ -681,22 +753,22 @@ document.querySelector('.tabs').addEventListener('click', (e) => {
   renderPanel();
 });
 
-$('#pbody').addEventListener('click', (e) => {
+$('#pbody').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-act]');
   if (!b) return;
   const act = b.dataset.act;
   if (act === 'export') exportCSV();
   else if (act === 'clearAll') {
-    if (confirm('Dzēst VISUS saglabātos laukumus? To nevar atsaukt.')) { plots = []; savePlots(); renderPanel(); }
+    if (await ask('Dzēst VISUS saglabātos laukumus? To nevar atsaukt.', { ok: 'Dzēst visus', danger: true })) { plots = []; savePlots(); renderPanel(); }
   } else if (act === 'del') {
     const id = Number(b.dataset.id);
     const p = plots.find((x) => x.id === id);
-    if (p && confirm(`Dzēst nogabala ${p.stand} laukumu ${p.no}?`)) { plots = plots.filter((x) => x.id !== id); savePlots(); renderPanel(); }
-  } else if (act === 'baf') { setBaf(Number(b.dataset.v)); renderPanel(); }
+    if (p && (await ask(`Dzēst nogabala ${p.stand} laukumu ${p.no}?`, { ok: 'Dzēst', danger: true }))) { plots = plots.filter((x) => x.id !== id); savePlots(); renderPanel(); }
+  } else if (act === 'baf') { await setBaf(Number(b.dataset.v)); renderPanel(); }
   else if (act === 'mode') { settings.mode = b.dataset.v; saveSettings(); renderPanel(); }
   else if (act === 'calib') startCalib();
   else if (act === 'resetCalib') {
-    if (confirm('Atiestatīt kalibrēšanu uz noklusējumu?')) { settings.fLong = C.DEFAULT_F_LONG; settings.calib = null; saveSettings(); renderPanel(); }
+    if (await ask('Atiestatīt kalibrēšanu uz noklusējumu?', { ok: 'Atiestatīt', danger: true })) { settings.fLong = C.DEFAULT_F_LONG; settings.calib = null; saveSettings(); renderPanel(); }
   }
 });
 $('#pbody').addEventListener('change', (e) => {
