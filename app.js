@@ -367,6 +367,11 @@ function nudge(d) {
 function startCalib() {
   closePanel();
   state.calib = { x1: -60, x2: 60, active: 'x1' };
+  const prev = settings.calib;
+  if (prev) {
+    $('#cW').value = String(+prev.widthCm.toFixed(2)).replace('.', ',');
+    $('#cD').value = String(+prev.distM.toFixed(3)).replace('.', ',');
+  }
   $('#bottom').classList.add('hidden');
   $('#calibBar').classList.remove('hidden');
 }
@@ -606,14 +611,14 @@ function settingsHTML() {
     <div>${cal ? `<span class="ok">Kalibrēts</span> ${new Date(cal.t).toLocaleDateString('lv-LV')} — ${fmt(cal.widthCm, 0)} cm no ${fmt(cal.distM, 2)} m` : '<span class="bad">Nav kalibrēts</span> — izmanto aptuvenu noklusējumu'}</div>
     <div class="sub">Horizontālais redzes leņķis: ${hfov} · video ${vw || '–'}×${vh || '–'}</div>
     <div class="btnrow"><button class="btn one" data-act="calib">Kalibrēt</button>${cal ? '<button class="btn ghost" data-act="resetCalib">Atiestatīt</button>' : ''}</div>
-    <p class="sub">Ieteikums: 1 m lata vai mērlente 5–10 m attālumā (mērīts no telefona), 2× vai 3× tālummaiņa. 1 px kļūda pie 100 px ≈ 1 % kļūda platumā ≈ 2 % kļūda G.</p>
+    <p class="sub">Ieteikums: A4 lapa (29,7 cm) 3 m attālumā vai auto numura zīme (52 cm) 5 m attālumā, mērīts no telefona, 2× tālummaiņa. Atstarpei jābūt vismaz ~100 px. 1 px kļūda pie 100 px ≈ 1 % kļūda platumā ≈ 2 % kļūda G.</p>
   </div>
 
   <h2>Robežkoka pārbaude</h2>
   <div class="card">
     <div class="row">
-      <label>Caurmērs 1,3 m, cm<input id="bD" type="number" inputmode="decimal" step="any"></label>
-      <label>Attālums līdz centram, m<input id="bL" type="number" inputmode="decimal" step="any"></label>
+      <label>Caurmērs 1,3 m, cm<input id="bD" type="text" inputmode="decimal" autocomplete="off"></label>
+      <label>Attālums līdz centram, m<input id="bL" type="text" inputmode="decimal" autocomplete="off"></label>
     </div>
     <div id="bRes" class="result sub">Ievadi caurmēru, lai redzētu robežattālumu (BAF ${settings.baf}).</div>
     <p class="sub">Attālums horizontāli no laukuma centra līdz stumbra <b>centram</b> (līdz mizai + ½ caurmēra).</p>

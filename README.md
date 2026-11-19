@@ -22,8 +22,8 @@ Tad iPhone Safari atver adresi → Kopīgot → **Pievienot sākuma ekrānam**.
 Pirmajā palaišanā atļauj kameru, kustības sensorus un atrašanās vietu.
 
 ## Pirms mērīšanas — kalibrēšana
-☰ → Iestatījumi → Kalibrēt. Novieto 1 m latu (vai mērlenti) 5–10 m attālumā, perpendikulāri skatam,
-ieslēdz 2×/3× tālummaiņu, uzvelc līnijas uz latas malām, ievadi platumu un attālumu, saglabā.
+☰ → Iestatījumi → Kalibrēt. Novieto A4 lapu (29,7 cm) 3 m attālumā vai auto numura zīmi (52 cm) 5 m attālumā, perpendikulāri skatam,
+ieslēdz 2× tālummaiņu, uzvelc līnijas uz latas malām, ievadi platumu un attālumu, saglabā.
 Pārbaude: BAF 1 režīmā 10 cm plats priekšmets 5,00 m attālumā ir tieši robežkoks.
 
 ## Faili

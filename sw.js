@@ -1,5 +1,5 @@
 // Bezsaistes darbība: atbild no kešatmiņas uzreiz, fonā atjauno no tīkla.
-const CACHE = 'skerslaukums-v3';
+const CACHE = 'skerslaukums-v4';
 const ASSETS = [
   './', './index.html', './style.css', './app.js', './calc.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
