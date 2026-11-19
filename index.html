@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="lv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Šķērslaukums">
+<meta name="theme-color" content="#0b0f0c">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+<title>Šķērslaukums</title>
+</head>
+<body>
+
+<div id="stage">
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="overlay"></canvas>
+</div>
+
+<div class="top">
+  <button class="pill" id="bafBtn">BAF 2</button>
+  <button class="pill" id="zoomBtn">2×</button>
+  <button class="pill" id="modeBtn">Prizma</button>
+  <span class="pill info" id="slopeInfo">∠ –</span>
+  <span class="spacer"></span>
+  <button class="pill" id="menuBtn" aria-label="Izvēlne">☰</button>
+</div>
+
+<div id="calibWarn" class="warn hidden"></div>
+<div id="flash"></div>
+
+<div class="bottom" id="bottom">
+  <button class="meta" id="metaBtn">Nogabals <b id="standLbl"></b> · laukums <b id="plotLbl"></b> ✎</button>
+  <div class="species" id="species"></div>
+  <div class="summary">
+    <span>Koki <b id="sumN">0</b></span>
+    <span>G <b id="sumG">0</b> m²/ha</span>
+    <span id="sumF" class="formula">—</span>
+  </div>
+  <div class="actions">
+    <button class="btn ghost" id="undoBtn">↶<small>atcelt</small></button>
+    <button class="btn half" id="halfBtn">+½<small>robežkoks</small></button>
+    <button class="btn one" id="oneBtn">+1<small>koks</small></button>
+  </div>
+  <button class="btn save" id="saveBtn">Saglabāt laukumu</button>
+</div>
+
+<div class="bottom hidden" id="calibBar">
+  <p class="hint">Novieto priekšmetu ar zināmu platumu (piem. 1 m latu) perpendikulāri skatam zināmā attālumā. Velc dzeltenās līnijas uz tā malām. Precīzāk — ar lielāku tālummaiņu.</p>
+  <div class="row">
+    <label>Platums, cm<input id="cW" type="number" inputmode="decimal" step="any" value="100"></label>
+    <label>Attālums, m<input id="cD" type="number" inputmode="decimal" step="any" value="5"></label>
+  </div>
+  <div class="row center">
+    <button class="btn ghost small" id="nudgeL">◀</button>
+    <span id="cPx" class="cpx">– px</span>
+    <button class="btn ghost small" id="nudgeR">▶</button>
+  </div>
+  <div class="row">
+    <button class="btn ghost" id="cCancel">Atcelt</button>
+    <button class="btn one" id="cSave">Saglabāt</button>
+  </div>
+</div>
+
+<div id="panel" class="hidden">
+  <div class="phead">
+    <div class="tabs">
+      <button data-tab="plots" class="sel">Laukumi</button>
+      <button data-tab="settings">Iestatījumi</button>
+      <button data-tab="help">Palīdzība</button>
+    </div>
+    <button class="pill" id="closePanel" aria-label="Aizvērt">✕</button>
+  </div>
+  <div class="pbody" id="pbody"></div>
+</div>
+
+<div id="start">
+  <div class="startcard">
+    <img src="icons/icon-192.png" alt="" width="88" height="88">
+    <h1>Šķērslaukums</h1>
+    <p>Bitterliha leņķa skaitīšanas metode (prizma / relaskops) ar telefona kameru. LiDAR nav vajadzīgs.</p>
+    <button class="btn one" id="startBtn">Sākt</button>
+    <p id="startErr" class="err"></p>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
