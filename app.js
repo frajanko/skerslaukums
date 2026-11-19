@@ -338,6 +338,31 @@ function hfovDeg(fLong, vw, vh) {
 }
 
 // ---------- Skaitīšana ----------
+// BAF nosaka skaitīšanas leņķi, tāpēc jau saskaitītos kokus nevar pārrēķināt
+// uz citu BAF — mainot BAF laukuma vidū, skaitīšana jāsāk no jauna.
+function setBaf(b) {
+  if (b === settings.baf) return true;
+  const n = C.totalCount(cur.counts);
+  if (n > 0) {
+    const ok = confirm(
+      `Šajā laukumā jau saskaitīti ${fmtN(n)} koki ar BAF ${settings.baf}.\n\n` +
+      `Ar BAF ${b} ir cits skaitīšanas leņķis, tāpēc koki jāpārskaita no jauna.\n\n` +
+      'Nodzēst pašreizējo skaitījumu un mainīt BAF?',
+    );
+    if (!ok) return false;
+    cur.counts = {};
+    cur.hist = [];
+    cur.cover = [];
+    cur.started = Date.now();
+    saveCur();
+  }
+  settings.baf = b;
+  saveSettings();
+  renderAll();
+  flash(`BAF ${b}`);
+  return true;
+}
+
 function add(v) {
   const sp = settings.species;
   cur.counts[sp] = (cur.counts[sp] || 0) + v;
@@ -621,10 +646,7 @@ $('#startBtn').addEventListener('click', async () => {
 });
 
 $('#bafBtn').addEventListener('click', () => {
-  settings.baf = BAFS[(BAFS.indexOf(settings.baf) + 1) % BAFS.length] || 2;
-  saveSettings();
-  renderAll();
-  flash(`BAF ${settings.baf}`);
+  setBaf(BAFS[(BAFS.indexOf(settings.baf) + 1) % BAFS.length] || 2);
 });
 $('#zoomBtn').addEventListener('click', () => setZoom(ZOOMS[(ZOOMS.indexOf(settings.zoom) + 1) % ZOOMS.length] || 1));
 $('#modeBtn').addEventListener('click', () => {
@@ -670,7 +692,7 @@ $('#pbody').addEventListener('click', (e) => {
     const id = Number(b.dataset.id);
     const p = plots.find((x) => x.id === id);
     if (p && confirm(`Dzēst nogabala ${p.stand} laukumu ${p.no}?`)) { plots = plots.filter((x) => x.id !== id); savePlots(); renderPanel(); }
-  } else if (act === 'baf') { settings.baf = Number(b.dataset.v); saveSettings(); renderPanel(); }
+  } else if (act === 'baf') { setBaf(Number(b.dataset.v)); renderPanel(); }
   else if (act === 'mode') { settings.mode = b.dataset.v; saveSettings(); renderPanel(); }
   else if (act === 'calib') startCalib();
   else if (act === 'resetCalib') {
