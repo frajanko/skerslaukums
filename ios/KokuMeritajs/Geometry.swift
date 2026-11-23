@@ -101,6 +101,19 @@ enum Geo {
         return 2 * d * s / (1 - s)
     }
 
+    /// Punkti uz riņķa, kur to skar stari no `p` — stumbra malas, kā tās redz telefons.
+    static func tangentPoints(center c: SIMD2<Double>, radius r: Double, from p: SIMD2<Double>) -> (SIMD2<Double>, SIMD2<Double>)? {
+        let v = p - c
+        let L = simd_length(v)
+        guard r > 0, L > r * 1.01 else { return nil }
+        let u = v / L
+        let phi = acos(r / L)
+        func rot(_ a: Double) -> SIMD2<Double> {
+            SIMD2(u.x * cos(a) - u.y * sin(a), u.x * sin(a) + u.y * cos(a))
+        }
+        return (c + r * rot(phi), c + r * rot(-phi))
+    }
+
     static func median(_ v: [Double]) -> Double? {
         guard !v.isEmpty else { return nil }
         let s = v.sorted()

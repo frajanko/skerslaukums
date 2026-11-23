@@ -22,9 +22,7 @@ struct TreeRecord: Codable, Identifiable, Hashable {
     var date: Date
     var dCm: Double?
     var dMethod: String?
-    var dHeight: Double?
     var hM: Double?
-    var hBase: String?
     var hDist: Double?
 }
 
@@ -55,8 +53,7 @@ final class TreeStore: ObservableObject {
 
     func add(_ m: TreeMeasure, species: String, stand: String) {
         let r = TreeRecord(stand: stand, no: nextNo(stand: stand), species: species, date: Date(),
-                           dCm: m.dCm, dMethod: m.dMethod, dHeight: m.dHeight,
-                           hM: m.hM, hBase: m.hBase, hDist: m.hDist)
+                           dCm: m.dCm, dMethod: m.dMethod, hM: m.hM, hDist: m.hDist)
         trees.append(r)
         save()
     }
@@ -77,23 +74,24 @@ final class TreeStore: ObservableObject {
         let df = DateFormatter(); df.locale = Locale(identifier: "lv_LV"); df.dateFormat = "dd.MM.yyyy"
         let tf = DateFormatter(); tf.locale = Locale(identifier: "lv_LV"); tf.dateFormat = "HH:mm:ss"
         func num(_ x: Double?, _ d: Int) -> String { x.map { fmt($0, d) } ?? "" }
-        func q(_ s: String) -> String {
-            s.contains(where: { $0 == ";" || $0 == "\"" || $0 == "\n" })
-                ? "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : s
-        }
-        let head = ["nogabals", "nr", "datums", "laiks", "suga", "D_cm", "H_m",
-                    "D_metode", "D_mērīšanas_augstums_m", "H_atskaite", "H_attālums_m"]
+        let head = ["nogabals", "nr", "datums", "laiks", "suga", "D_cm", "H_m", "D_metode", "H_attālums_m"]
         let rows = trees.map { t in
             [t.stand, String(t.no), df.string(from: t.date), tf.string(from: t.date), t.species,
-             num(t.dCm, 1), num(t.hM, 1), t.dMethod ?? "", num(t.dHeight, 2), t.hBase ?? "", num(t.hDist, 1)]
-                .map(q).joined(separator: ";")
+             num(t.dCm, 1), num(t.hM, 1), t.dMethod ?? "", num(t.hDist, 1)]
+                .map(csvCell).joined(separator: ";")
         }
         return "\u{FEFF}" + ([head.joined(separator: ";")] + rows).joined(separator: "\r\n")
     }
+}
 
-    func csvFile() -> URL? {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
-        let u = FileManager.default.temporaryDirectory.appendingPathComponent("koki_\(f.string(from: Date())).csv")
-        do { try csv().write(to: u, atomically: true, encoding: .utf8); return u } catch { return nil }
-    }
+func csvCell(_ s: String) -> String {
+    s.contains(where: { $0 == ";" || $0 == "\"" || $0 == "\n" })
+        ? "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : s
+}
+
+/// Ieraksta CSV pagaidu failā kopīgošanai, piem. „koki_2026-11-23.csv”.
+func writeTemp(_ prefix: String, _ text: String) -> URL? {
+    let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
+    let u = FileManager.default.temporaryDirectory.appendingPathComponent("\(prefix)_\(f.string(from: Date())).csv")
+    do { try text.write(to: u, atomically: true, encoding: .utf8); return u } catch { return nil }
 }

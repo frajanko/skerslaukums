@@ -6,7 +6,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.1"
+    MARKETING_VERSION: "0.2"
     CURRENT_PROJECT_VERSION: "1"
     TARGETED_DEVICE_FAMILY: "1"
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -28,7 +28,8 @@ targets:
         CFBundleDisplayName: Koku mērītājs
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        NSCameraUsageDescription: Kamera un LiDAR vajadzīgi koku caurmēra un augstuma mērīšanai.
+        NSCameraUsageDescription: Kamera un LiDAR vajadzīgi šķērslaukuma, koku caurmēra un augstuma mērīšanai.
+        NSLocationWhenInUseUsageDescription: Atrašanās vieta tiek saglabāta pie šķērslaukuma laukuma (GPS koordinātas CSV failā).
         UIRequiredDeviceCapabilities: [arkit]
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]

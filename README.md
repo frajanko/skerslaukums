@@ -26,18 +26,21 @@ Pirmajā palaišanā atļauj kameru, kustības sensorus un atrašanās vietu.
 ieslēdz 2× tālummaiņu, uzvelc līnijas uz priekšmeta malām, ievadi platumu un attālumu, saglabā.
 Pārbaude: BAF 1 režīmā 10 cm plats priekšmets 5,00 m attālumā ir tieši robežkoks.
 
-## Koku mērītājs — iOS lietotne ar LiDAR (mape `ios/`)
-Atsevišķa native lietotne iPhone **Pro** modeļiem (LiDAR). Safari tīmekļa lietotnēm LiDAR datus nedod,
-tāpēc šī daļa nav PWA.
+## iOS lietotne (mape `ios/`) — šķērslaukums + koku caurmērs un augstums
+Native lietotne iPhone **Pro** modeļiem (LiDAR). Augšā pārslēdz **Šķērslaukums | Koki**.
+Safari tīmekļa lietotnēm LiDAR datus nedod, tāpēc šī daļa nav PWA. Tīmekļa versija (augstāk) paliek tiem, kam nav iPhone Pro.
 
-**Kā mēra**
-1. **Pamatne** — tēmē stumbra apakšu pie zemes (līdz 4 m), LiDAR atzīmē punktu (dzeltena lodīte).
-2. **Caurmērs** — 1–3 m no koka paceļ tēmēkli līdz „1,30 m virs pamatnes” (zaļš), spied „Mērīt”.
-   Sekundes laikā tiek savākti LiDAR punkti ±4 cm joslā šajā augstumā, un tiem pielāgots riņķis
-   (metode „aplis”). Ja riņķis nav ticams, D aprēķina pēc stumbra leņķiskā platuma (metode „malas”):
-   r = d·sin(α/2) / (1 − sin(α/2)). Zaļais disks AR skatā rāda, vai mērījums sakrīt ar stumbru.
-3. **Augstums** — atkāpies (ideāli ~ koka augstuma attālumā), tēmē galotni. ARKit seko telefona pozīcijai,
-   augstums = punkts, kur tēmēšanas stars šķērso stumbra asi, mīnus pamatnes augstums.
+**Šķērslaukums** — tas pats, kas PWA (prizma / mērlīnijas, BAF 1–4, sugas, sastāvs, laukumi, vidējais G ar 95 % intervālu,
+GPS, robežkoka pārbaude, CSV ar tām pašām kolonnām), bet **bez kalibrēšanas**: ARKit dod kameras precīzo fokusa attālumu.
+Slīpums un apgrieziena aplis nāk no AR izsekošanas (kompass nav vajadzīgs).
+
+**Koki**
+1. **Caurmērs** — 1–3 m no koka novieto tēmēkli stumbra vidū 1,3 m augstumā (pēc acs). Baltās līnijas rāda,
+   kur lietotne redz stumbra malas. Spied „Mērīt” — sekundes laikā tiek savākti LiDAR punkti ±4 cm joslā šajā augstumā,
+   un tiem pielāgots riņķis (metode „aplis”). Ja riņķis nav ticams, D aprēķina pēc stumbra leņķiskā platuma (metode „malas”):
+   r = d·sin(α/2) / (1 − sin(α/2)). Izmērītās malas paliek AR skatā kā zaļas līnijas.
+2. **Augstums** — atkāpies (ideāli ~ koka augstuma attālumā), tēmē galotni. ARKit seko telefona pozīcijai,
+   augstums = punkts, kur tēmēšanas stars šķērso stumbra asi, mīnus zeme (1,3 m zem caurmēra mērīšanas vietas).
 
 Saglabātie koki (nogabals, nr., suga, D, H) → saraksts ar kopsavilkumu pa sugām → CSV (Excel, `;`).
 
@@ -65,6 +68,6 @@ Pirmajos mērījumos salīdzini ar dastu un mērlenti — LiDAR precizitāte me�
 | `app.js` | kamera, sensori, zīmēšana, skaitīšana, saglabāšana, eksports |
 | `calc.js` | formulas (BAF, leņķi, slīpums, sastāvs, statistika) |
 | `sw.js`, `manifest.webmanifest`, `icons/` | bezsaistes darbība un instalēšana |
-| `ios/` | iOS LiDAR lietotne (Swift, ARKit): `Measurer.swift` mērīšana, `Depth.swift` LiDAR dati un stumbra šķēlums, `Geometry.swift` riņķa fits |
+| `ios/` | iOS lietotne (Swift, ARKit): `Basal.swift` / `BasalViews.swift` šķērslaukums un prizma, `Measurer.swift` koku mērīšana, `Depth.swift` LiDAR dati un stumbra šķēlums, `Geometry.swift` riņķa fits, `App.swift` ekrāni |
 
 Pēc failu izmaiņām `sw.js` palielini `CACHE` versiju, lai telefons ielādētu jauno versiju.
