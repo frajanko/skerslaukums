@@ -34,8 +34,10 @@ jobs:
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build 2>&1 | tee build.log | grep -E "error:|warning:|BUILD" || true
-          test -d build/Build/Products/Release-iphoneos/KokuMeritajs.app
+            build > build.log 2>&1 && ok=1 || ok=0
+          grep -E "error:|warning:|BUILD (SUCCEEDED|FAILED)" build.log | sort -u || true
+          test "$ok" = 1
+          test -f build/Build/Products/Release-iphoneos/KokuMeritajs.app/KokuMeritajs
 
       - name: Iepako .ipa
         run: |

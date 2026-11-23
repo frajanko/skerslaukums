@@ -7,7 +7,7 @@ struct KokuMeritajsApp: App {
     @StateObject private var store = TreeStore()
     @StateObject private var measurer = Measurer()
 
-    var body: some Scene {
+    var body: some SwiftUI.Scene {
         WindowGroup {
             Group {
                 if Measurer.lidarAvailable {
