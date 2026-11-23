@@ -1,0 +1,60 @@
+name: iOS lietotne
+
+on:
+  push:
+    branches: [main]
+    paths: ['ios/**', '.github/workflows/ios.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode versija
+        run: xcodebuild -version
+
+      - name: Ikona 1024×1024
+        run: sips -z 1024 1024 icons/icon-512.png --out ios/KokuMeritajs/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+
+      - name: Ģenerē Xcode projektu
+        run: |
+          brew install xcodegen
+          cd ios && xcodegen generate
+
+      - name: Kompilē (bez parakstīšanas — paraksta Sideloadly)
+        run: |
+          set -o pipefail
+          cd ios
+          xcodebuild -project KokuMeritajs.xcodeproj -scheme KokuMeritajs \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | grep -E "error:|warning:|BUILD" || true
+          test -d build/Build/Products/Release-iphoneos/KokuMeritajs.app
+
+      - name: Iepako .ipa
+        run: |
+          cd ios
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/KokuMeritajs.app Payload/
+          zip -qry KokuMeritajs.ipa Payload
+          ls -la KokuMeritajs.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KokuMeritajs-ipa
+          path: ios/KokuMeritajs.ipa
+
+      - name: Publicē kā „ios-latest” relīzi
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete ios-latest --yes --cleanup-tag || true
+          gh release create ios-latest ios/KokuMeritajs.ipa --prerelease --target "${{ github.sha }}" \
+            --title "Koku mērītājs (iOS, LiDAR)" \
+            --notes "Neparakstīts .ipa no ${GITHUB_SHA::7}. Instalē ar Sideloadly (Windows) un savu Apple ID; jāpārinstalē ik pēc 7 dienām."

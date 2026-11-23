@@ -1,0 +1,7 @@
+ios/build/
+ios/Payload/
+ios/*.ipa
+ios/build.log
+ios/*.xcodeproj/
+ios/KokuMeritajs/Info.plist
+ios/KokuMeritajs/Assets.xcassets/AppIcon.appiconset/icon-1024.png

@@ -1,0 +1,38 @@
+name: KokuMeritajs
+options:
+  bundleIdPrefix: com.frajanko
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1"
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    GENERATE_INFOPLIST_FILE: NO
+targets:
+  KokuMeritajs:
+    type: application
+    platform: iOS
+    scheme: {}
+    sources:
+      - KokuMeritajs
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.frajanko.kokumeritajs
+        INFOPLIST_FILE: KokuMeritajs/Info.plist
+    info:
+      path: KokuMeritajs/Info.plist
+      properties:
+        CFBundleDisplayName: Koku mērītājs
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSCameraUsageDescription: Kamera un LiDAR vajadzīgi koku caurmēra un augstuma mērīšanai.
+        UIRequiredDeviceCapabilities: [arkit]
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIApplicationSupportsIndirectInputEvents: true
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        ITSAppUsesNonExemptEncryption: false
