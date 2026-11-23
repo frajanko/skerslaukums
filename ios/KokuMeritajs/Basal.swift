@@ -1,4 +1,5 @@
 import ARKit
+import CoreImage
 import CoreLocation
 import Metal
 import RealityKit
@@ -76,12 +77,13 @@ enum Calc {
 
 final class Gauge {
     static let shared = Gauge()
-    static let bandFrac: Float = 0.12
 
     private let lock = NSLock()
     private var fy: Float = 0, imgW: Float = 1920, imgH: Float = 1440
     private var pitch: Float = 0
-    private var prism = false, baf: Float = 2, slopeCorr = true, zoom: Float = 1
+    private var active = false, prism = false, baf: Float = 2, slopeCorr = true, zoom: Float = 3
+    private var arFrame = CGRect.zero    // AR skats ekrāna punktos (var būt lielāks par ekrānu)
+    private var window = CGRect.zero     // prizmas logs ekrāna punktos
 
     func setCamera(_ cam: ARCamera) {
         lock.lock(); defer { lock.unlock() }
@@ -94,51 +96,77 @@ final class Gauge {
         lock.lock(); pitch = p; lock.unlock()
     }
 
-    func setBasal(prism: Bool, baf: Int, slopeCorr: Bool, zoom: Int) {
+    func setBasal(active: Bool, prism: Bool, baf: Int, slopeCorr: Bool, zoom: Int) {
         lock.lock(); defer { lock.unlock() }
-        self.prism = prism; self.baf = Float(baf); self.slopeCorr = slopeCorr; self.zoom = Float(zoom)
+        self.active = active; self.prism = prism; self.baf = Float(baf)
+        self.slopeCorr = slopeCorr; self.zoom = Float(zoom)
     }
 
-    /// Fokusa attālums skatam ar izmēru w×h (portrets, attēls aizpilda ekrānu), tajās pašās vienībās.
-    /// Kameras attēls ir guļus (piem. 1920×1440), portretā ekrāna horizontāle = attēla vertikāle.
-    func focal(viewW: Float, viewH: Float) -> Float? {
-        lock.lock(); defer { lock.unlock() }
-        guard fy > 0 else { return nil }
-        return fy * max(viewW / imgH, viewH / imgW)
+    func setARFrame(_ r: CGRect) {
+        lock.lock(); arFrame = r; lock.unlock()
     }
 
-    /// Prizmas nobīde un joslas augstums renderētā attēla pikseļos (pirms digitālās tālummaiņas).
-    func prismParams(texW: Int, texH: Int) -> (shift: Int, bandH: Int)? {
+    func setWindow(_ r: CGRect) {
+        lock.lock(); window = r; lock.unlock()
+    }
+
+    /// Kameras fokusa attālums AR skata punktos (portrets, attēls aizpilda skatu).
+    /// Kameras attēls ir guļus (piem. 1920×1440), portretā skata horizontāle = attēla vertikāle.
+    func focalPoints() -> Double? {
         lock.lock(); defer { lock.unlock() }
-        guard prism, fy > 0 else { return nil }
-        let F = Double(fy * max(Float(texW) / imgH, Float(texH) / imgW))
+        guard fy > 0, arFrame.width > 0 else { return nil }
+        return Double(fy) * max(Double(arFrame.width) / Double(imgH), Double(arFrame.height) / Double(imgW))
+    }
+
+    /// Prizmas loga taisnstūris, palielinājums un nobīde renderētā attēla pikseļos.
+    func windowParams(texW: Int, texH: Int) -> (rect: CGRect, zoom: Double, shift: Double)? {
+        lock.lock(); defer { lock.unlock() }
+        guard active, fy > 0, arFrame.width > 0, arFrame.height > 0, window.width > 0, window.height > 0 else { return nil }
+        let sx = Double(texW) / arFrame.width, sy = Double(texH) / arFrame.height
+        let r = CGRect(x: (window.minX - arFrame.minX) * sx, y: (window.minY - arFrame.minY) * sy,
+                       width: window.width * sx, height: window.height * sy)
+        let F = Double(fy) * max(Double(texW) / Double(imgH), Double(texH) / Double(imgW))
         let s = Calc.critSin(baf: Double(baf), slopeDeg: slopeCorr ? Double(pitch) : 0)
-        let shift = Int(Calc.gaugeWidth(F: F, sinHalf: s).rounded())
-        let bandH = Int((Float(texH) * Self.bandFrac / zoom).rounded())
-        return (shift, bandH)
+        return (r, Double(zoom), prism ? Calc.gaugeWidth(F: F, sinHalf: s) : 0)
     }
 }
 
-/// Virtuālā prizma: josla ekrāna vidū ar attēlu, nobīdītu par kritisko leņķi.
+/// Prizmas logs: palielināts tēmēkļa apkārtnes attēls; augšējā pusē reālais attēls,
+/// apakšējā — nobīdīts par kritisko leņķi (kā skatoties caur prizmu).
 enum Prism {
+    private static var ci: CIContext?
+
     static func postProcess(_ ctx: ARView.PostProcessContext) {
         let src = ctx.sourceColorTexture, dst = ctx.targetColorTexture
-        guard let blit = ctx.commandBuffer.makeBlitCommandEncoder() else { return }
-        blit.copy(from: src, to: dst)
-        blit.endEncoding()
+        guard let p = Gauge.shared.windowParams(texW: src.width, texH: src.height),
+              let image = CIImage(mtlTexture: src, options: nil) else {
+            if let blit = ctx.commandBuffer.makeBlitCommandEncoder() {
+                blit.copy(from: src, to: dst)
+                blit.endEncoding()
+            }
+            return
+        }
+        if ci == nil { ci = CIContext(mtlDevice: ctx.device) }
 
-        guard let p = Gauge.shared.prismParams(texW: src.width, texH: src.height) else { return }
-        let W = src.width, H = src.height
-        let y0 = max(0, H / 2 - p.bandH / 2)
-        let h = min(p.bandH, H - y0)
-        guard p.shift > 0, p.shift < W, h > 0,
-              let b2 = ctx.commandBuffer.makeBlitCommandEncoder() else { return }
-        b2.copy(from: src, sourceSlice: 0, sourceLevel: 0,
-                sourceOrigin: MTLOrigin(x: 0, y: y0, z: 0),
-                sourceSize: MTLSize(width: W - p.shift, height: h, depth: 1),
-                to: dst, destinationSlice: 0, destinationLevel: 0,
-                destinationOrigin: MTLOrigin(x: p.shift, y: y0, z: 0))
-        b2.endEncoding()
+        // CIImage no tekstūras un neapgriezts galamērķis → y ass uz leju, kā ekrānā.
+        let cx = Double(src.width) / 2, cy = Double(src.height) / 2
+        let r = p.rect, M = p.zoom
+        let base = image.clampedToExtent()
+        func view(shift: Double) -> CIImage {
+            let t = CGAffineTransform(translationX: -cx + shift, y: -cy)
+                .concatenating(CGAffineTransform(scaleX: M, y: M))
+                .concatenating(CGAffineTransform(translationX: r.midX, y: r.midY))
+            return base.transformed(by: t)
+        }
+        let topHalf = CGRect(x: r.minX, y: r.minY, width: r.width, height: r.height / 2)
+        let bottomHalf = CGRect(x: r.minX, y: r.midY, width: r.width, height: r.height / 2)
+        let out = view(shift: p.shift).cropped(to: bottomHalf)
+            .composited(over: view(shift: 0).cropped(to: topHalf))
+            .composited(over: image)
+
+        let dest = CIRenderDestination(mtlTexture: dst, commandBuffer: ctx.commandBuffer)
+        dest.isFlipped = false
+        _ = try? ci?.startTask(toRender: out, to: dest)
     }
 }
 
@@ -190,7 +218,7 @@ struct Flash: Equatable {
 
 final class BasalModel: ObservableObject {
     static let bafs = [1, 2, 3, 4]
-    static let zooms = [1, 2, 3]
+    static let zooms = [2, 3, 4]
 
     @Published private(set) var plots: [Plot] = []
     @Published private(set) var cur = CurrentPlot()
@@ -200,7 +228,7 @@ final class BasalModel: ObservableObject {
     @Published var zoom: Int { didSet { ud.set(zoom, forKey: "b.zoom"); pushGauge() } }
     @Published var flash: Flash? = nil
 
-    /// Šķērslaukuma režīms redzams (prizma zīmējas tikai tad).
+    /// Šķērslaukuma režīms redzams (prizmas logs zīmējas tikai tad).
     var active = false { didSet { pushGauge() } }
 
     private let ud = UserDefaults.standard
@@ -213,14 +241,15 @@ final class BasalModel: ObservableObject {
         baf = d.object(forKey: "b.baf") as? Int ?? 2
         prism = d.object(forKey: "b.prism") as? Bool ?? true
         slopeCorr = d.object(forKey: "b.slope") as? Bool ?? true
-        zoom = d.object(forKey: "b.zoom") as? Int ?? 2
+        let z = d.object(forKey: "b.zoom") as? Int ?? 3
+        zoom = BasalModel.zooms.contains(z) ? z : 3
         if let d = try? Data(contentsOf: plotsURL), let p = try? JSONDecoder().decode([Plot].self, from: d) { plots = p }
         if let d = try? Data(contentsOf: curURL), let c = try? JSONDecoder().decode(CurrentPlot.self, from: d) { cur = c }
         pushGauge()
     }
 
     private func pushGauge() {
-        Gauge.shared.setBasal(prism: active && prism, baf: baf, slopeCorr: slopeCorr, zoom: zoom)
+        Gauge.shared.setBasal(active: active, prism: prism, baf: baf, slopeCorr: slopeCorr, zoom: zoom)
     }
 
     private func savePlots() {

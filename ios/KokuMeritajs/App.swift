@@ -75,17 +75,35 @@ struct RootView: View {
     @AppStorage("tab") private var tab = "basal"
     @State private var showData = false
     @State private var showHelp = false
+    @State private var windowFrame: CGRect = .zero
 
     private var isBasal: Bool { tab == "basal" }
 
+    /// Kur ekrānā (no augšas) ir tēmēšanas punkts = kameras attēla centrs.
+    /// Šķērslaukumā — starp augšējām pogām un prizmas logu, lai logs to neaizsedz.
+    private func aimY(_ H: CGFloat) -> CGFloat {
+        guard isBasal else { return H / 2 }
+        guard windowFrame.height > 0 else { return H * 0.34 }
+        return max(H * 0.22, (150 + windowFrame.minY) / 2)
+    }
+
     var body: some View {
         ZStack {
-            ARContainer(measurer: m)
-                .scaleEffect(isBasal ? CGFloat(basal.zoom) : 1)
-                .ignoresSafeArea()
-
-            Group {
-                if isBasal { GaugeOverlay(pose: m.pose) } else { Crosshair() }
+            GeometryReader { geo in
+                let W = geo.size.width, H = geo.size.height
+                let y = aimY(H)
+                // AR skats ir garāks par ekrānu un pabīdīts uz augšu, lai tā centrs būtu pie `y`.
+                let arH = 2 * max(y, H - y)
+                let arFrame = CGRect(x: 0, y: y - arH / 2, width: W, height: arH)
+                let _ = Gauge.shared.setARFrame(arFrame)
+                ARContainer(measurer: m)
+                    .frame(width: W, height: arH)
+                    .position(x: W / 2, y: y)
+                if isBasal {
+                    Reticle().position(x: W / 2, y: y)
+                } else {
+                    Crosshair()
+                }
             }
             .ignoresSafeArea()
 
@@ -101,10 +119,19 @@ struct RootView: View {
                         .foregroundStyle(f.color).shadow(color: .black, radius: 4)
                         .transition(.opacity)
                 }
-                if isBasal { BasalPanel() } else { TreePanel() }
+                if isBasal {
+                    PrismWindow(pose: m.pose)
+                    BasalPanel()
+                } else {
+                    TreePanel()
+                }
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
+        }
+        .onPreferenceChange(WindowFrameKey.self) { r in
+            windowFrame = r
+            Gauge.shared.setWindow(r)
         }
         .onAppear(perform: syncActive)
         .onChange(of: tab) { syncActive() }
@@ -430,9 +457,9 @@ struct HelpView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     Group {
                         Text("Šķērslaukums").font(.title3.bold())
-                        Text("Bitterliha metode. Nostājies laukuma centrā un griezies ap telefonu, nevis ap sevi. Pavērs dzelteno joslu uz stumbra 1,3 m augstumā.")
-                        Text("**Prizma:** joslā attēls ir nobīdīts par kritisko leņķi. Nobīdītais stumbra gabals vēl pārklājas ar stumbru → **+1**, malas tieši sakrīt → **+½**, starp tiem sprauga → neskaita.")
-                        Text("**Līnijas:** stumbrs platāks par atstarpi → +1, vienāds → +½, šaurāks → neskaita.")
+                        Text("Bitterliha metode. Nostājies laukuma centrā un griezies ap telefonu, nevis ap sevi. Novieto apaļo tēmēkli uz stumbra 1,3 m augstumā.")
+                        Text("**Prizmas logs** (virs pogām) rāda tēmēkļa apkārtni palielinātu: augšējā pusē reālais stumbrs, apakšējā — nobīdīts par kritisko leņķi. Nobīdītais gabals vēl pārklājas ar stumbru augšā → **+1**, malas tieši sakrīt → **+½**, starp tiem sprauga → neskaita. 🔍 maina palielinājumu.")
+                        Text("**Līnijas:** logā divas līnijas; stumbrs platāks par atstarpi → +1, vienāds → +½, šaurāks → neskaita.")
                         Text("Pirms skaitīšanas izvēlies sugu. Aplis augšā pa labi rāda, cik no pilna apgrieziena jau apskatīts. G = koku skaits × BAF (m²/ha).")
                         Text("Kalibrēt nevajag — ARKit zina kameras precīzos parametrus. Slīpuma korekcija ņem telefona slīpumu no AR izsekošanas.")
                             .font(.footnote).foregroundStyle(.secondary)

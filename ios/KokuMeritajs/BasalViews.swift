@@ -2,49 +2,95 @@ import SwiftUI
 
 private let gaugeYellow = Color(red: 1, green: 0.94, blue: 0.35)
 
-/// Mērlīnijas vai prizmas joslas malas ekrāna centrā (prizmas nobīdi zīmē `Prism`).
-struct GaugeOverlay: View {
+/// Apaļš tēmēklis galvenajā skatā (kameras attēla centrā).
+struct Reticle: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let c = CGPoint(x: size.width / 2, y: size.height / 2)
+            let r: CGFloat = 34, gap: CGFloat = 5, arm: CGFloat = 46
+            var p = Path()
+            p.addEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+            p.move(to: CGPoint(x: c.x - arm, y: c.y)); p.addLine(to: CGPoint(x: c.x - gap, y: c.y))
+            p.move(to: CGPoint(x: c.x + gap, y: c.y)); p.addLine(to: CGPoint(x: c.x + arm, y: c.y))
+            p.move(to: CGPoint(x: c.x, y: c.y - arm)); p.addLine(to: CGPoint(x: c.x, y: c.y - gap))
+            p.move(to: CGPoint(x: c.x, y: c.y + gap)); p.addLine(to: CGPoint(x: c.x, y: c.y + arm))
+            ctx.stroke(p, with: .color(.black.opacity(0.55)), lineWidth: 3)
+            ctx.stroke(p, with: .color(.white.opacity(0.9)), lineWidth: 1.2)
+        }
+        .frame(width: 100, height: 100)
+        .allowsHitTesting(false)
+    }
+}
+
+struct WindowFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let n = nextValue()
+        if n != .zero { value = n }
+    }
+}
+
+/// Prizmas logs virs pogām. Attēlu tajā zīmē `Prism` (renderētājs); šeit — rāmis, līnijas, uzraksti.
+struct PrismWindow: View {
     @EnvironmentObject var b: BasalModel
     @ObservedObject var pose: Pose
+    static let height: CGFloat = 150
 
     var body: some View {
-        GeometryReader { geo in
-            let W = geo.size.width, H = geo.size.height
-            let slope = b.slopeCorr ? (pose.pitch ?? 0) : 0
-            let s = Calc.critSin(baf: Double(b.baf), slopeDeg: slope)
-            let F = Gauge.shared.focal(viewW: Float(W), viewH: Float(H)).map { Double($0) * Double(b.zoom) }
-            let w = F.map { Calc.gaugeWidth(F: $0, sinHalf: s) }
-            let ang = 2 * asin(min(0.5, s)) * 180 / .pi
-            Canvas { ctx, _ in
-                let cx = W / 2, cy = H / 2
-                let bandH = max(50, H * CGFloat(Gauge.bandFrac))
-                let y0 = cy - bandH / 2, y1 = cy + bandH / 2
+        let slope = b.slopeCorr ? (pose.pitch ?? 0) : 0
+        let s = Calc.critSin(baf: Double(b.baf), slopeDeg: slope)
+        let M = Double(b.zoom)
+        let w = Gauge.shared.focalPoints().map { Calc.gaugeWidth(F: $0, sinHalf: s) * M }
+        let ang = 2 * asin(min(0.5, s)) * 180 / .pi
 
-                func line(_ a: CGPoint, _ c: CGPoint, _ width: CGFloat = 1.5, _ col: Color = gaugeYellow) {
-                    var p = Path(); p.move(to: a); p.addLine(to: c)
-                    ctx.stroke(p, with: .color(.black.opacity(0.75)), lineWidth: width + 2)
-                    ctx.stroke(p, with: .color(col), lineWidth: width)
-                }
+        Canvas { ctx, size in
+            let W = size.width, H = size.height, cx = W / 2
 
-                if b.prism {
-                    line(CGPoint(x: 0, y: y0), CGPoint(x: W, y: y0), 1, gaugeYellow.opacity(0.85))
-                    line(CGPoint(x: 0, y: y1), CGPoint(x: W, y: y1), 1, gaugeYellow.opacity(0.85))
-                    line(CGPoint(x: cx, y: y0 - 14), CGPoint(x: cx, y: y0))
-                    line(CGPoint(x: cx, y: y1), CGPoint(x: cx, y: y1 + 14))
-                } else if let w {
-                    let xl = cx - w / 2, xr = cx + w / 2
-                    line(CGPoint(x: xl, y: y0), CGPoint(x: xl, y: y1))
-                    line(CGPoint(x: xr, y: y0), CGPoint(x: xr, y: y1))
-                    line(CGPoint(x: xl - 18, y: cy), CGPoint(x: xl, y: cy), 1, gaugeYellow.opacity(0.6))
-                    line(CGPoint(x: xr, y: cy), CGPoint(x: xr + 18, y: cy), 1, gaugeYellow.opacity(0.6))
-                }
-
-                let label = w == nil ? "kamera vēl nav gatava" : "\(fmt(ang, 2))° · BAF \(b.baf)"
-                ctx.draw(Text(label).font(.caption.bold()).foregroundStyle(.white),
-                         at: CGPoint(x: cx, y: y1 + 28))
+            func line(_ a: CGPoint, _ c: CGPoint, _ width: CGFloat = 1.5, _ col: Color = gaugeYellow) {
+                var p = Path(); p.move(to: a); p.addLine(to: c)
+                ctx.stroke(p, with: .color(.black.opacity(0.75)), lineWidth: width + 2)
+                ctx.stroke(p, with: .color(col), lineWidth: width)
             }
+
+            if b.prism {
+                line(CGPoint(x: 0, y: H / 2), CGPoint(x: W, y: H / 2), 1, gaugeYellow.opacity(0.9))
+                var tri = Path()
+                tri.move(to: CGPoint(x: cx - 6, y: 0)); tri.addLine(to: CGPoint(x: cx + 6, y: 0))
+                tri.addLine(to: CGPoint(x: cx, y: 9)); tri.closeSubpath()
+                ctx.fill(tri, with: .color(gaugeYellow))
+            } else if let w {
+                line(CGPoint(x: cx - w / 2, y: 0), CGPoint(x: cx - w / 2, y: H))
+                line(CGPoint(x: cx + w / 2, y: 0), CGPoint(x: cx + w / 2, y: H))
+            }
+            ctx.stroke(Path(CGRect(x: 0, y: 0, width: W, height: H)), with: .color(.white.opacity(0.7)), lineWidth: 1.5)
         }
         .allowsHitTesting(false)
+        .frame(height: Self.height)
+        .frame(maxWidth: .infinity)
+        .background(GeometryReader { g in
+            Color.clear.preference(key: WindowFrameKey.self, value: g.frame(in: .global))
+        })
+        .overlay(alignment: .topLeading) {
+            Text(w == nil ? "kamera vēl nav gatava" : "\(fmt(ang, 2))° · BAF \(b.baf)")
+                .font(.caption2.bold()).padding(.horizontal, 6).padding(.vertical, 3)
+                .background(.black.opacity(0.45), in: Capsule()).padding(6)
+        }
+        .overlay(alignment: .bottomLeading) {
+            Button(b.prism ? "Prizma" : "Līnijas") { b.prism.toggle() }
+                .font(.caption.bold()).padding(.horizontal, 10).padding(.vertical, 5)
+                .background(.black.opacity(0.5), in: Capsule()).padding(6)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Button {
+                b.zoom = BasalModel.zooms[(BasalModel.zooms.firstIndex(of: b.zoom).map { $0 + 1 } ?? 0) % BasalModel.zooms.count]
+            } label: {
+                Label("\(b.zoom)×", systemImage: "plus.magnifyingglass")
+                    .font(.caption.bold()).padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.black.opacity(0.5), in: Capsule())
+            }
+            .padding(6)
+        }
+        .foregroundStyle(.white)
     }
 }
 
@@ -93,12 +139,6 @@ struct BasalTopRow: View {
                 if b.cur.n > 0 { askBaf = next } else { b.setBaf(next) }
             }
             .modifier(PillStyle())
-            Button("\(b.zoom)×") {
-                b.zoom = BasalModel.zooms[(BasalModel.zooms.firstIndex(of: b.zoom).map { $0 + 1 } ?? 0) % BasalModel.zooms.count]
-            }
-            .modifier(PillStyle())
-            Button(b.prism ? "Prizma" : "Līnijas") { b.prism.toggle() }
-                .modifier(PillStyle())
             Text(pose.pitch.map { "∠ \(fmt($0, 0))°" + (b.slopeCorr ? "" : " (izsl.)") } ?? "∠ –")
                 .modifier(PillStyle())
             Spacer(minLength: 0)
@@ -252,7 +292,7 @@ struct BasalSettingsView: View {
                         Text("Mērlīnijas").tag(false)
                     }
                     .pickerStyle(.segmented)
-                    Picker("Tālummaiņa", selection: $b.zoom) {
+                    Picker("Palielinājums prizmas logā", selection: $b.zoom) {
                         ForEach(BasalModel.zooms, id: \.self) { Text("\($0)×").tag($0) }
                     }
                     .pickerStyle(.segmented)

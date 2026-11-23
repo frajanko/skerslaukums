@@ -30,7 +30,8 @@ Pārbaude: BAF 1 režīmā 10 cm plats priekšmets 5,00 m attālumā ir tieši r
 Native lietotne iPhone **Pro** modeļiem (LiDAR). Augšā pārslēdz **Šķērslaukums | Koki**.
 Safari tīmekļa lietotnēm LiDAR datus nedod, tāpēc šī daļa nav PWA. Tīmekļa versija (augstāk) paliek tiem, kam nav iPhone Pro.
 
-**Šķērslaukums** — tas pats, kas PWA (prizma / mērlīnijas, BAF 1–4, sugas, sastāvs, laukumi, vidējais G ar 95 % intervālu,
+**Šķērslaukums** — augšā kameras attēls ar apaļu tēmēkli, virs pogām **prizmas logs**: tēmēkļa apkārtne palielināta
+(2×/3×/4×), augšējā pusē reālais attēls, apakšējā — nobīdīts par kritisko leņķi. Pārējais kā PWA (prizma / mērlīnijas, BAF 1–4, sugas, sastāvs, laukumi, vidējais G ar 95 % intervālu,
 GPS, robežkoka pārbaude, CSV ar tām pašām kolonnām), bet **bez kalibrēšanas**: ARKit dod kameras precīzo fokusa attālumu.
 Slīpums un apgrieziena aplis nāk no AR izsekošanas (kompass nav vajadzīgs).
 
