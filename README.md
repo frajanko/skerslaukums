@@ -26,6 +26,37 @@ Pirmajā palaišanā atļauj kameru, kustības sensorus un atrašanās vietu.
 ieslēdz 2× tālummaiņu, uzvelc līnijas uz priekšmeta malām, ievadi platumu un attālumu, saglabā.
 Pārbaude: BAF 1 režīmā 10 cm plats priekšmets 5,00 m attālumā ir tieši robežkoks.
 
+## Koku mērītājs — iOS lietotne ar LiDAR (mape `ios/`)
+Atsevišķa native lietotne iPhone **Pro** modeļiem (LiDAR). Safari tīmekļa lietotnēm LiDAR datus nedod,
+tāpēc šī daļa nav PWA.
+
+**Kā mēra**
+1. **Pamatne** — tēmē stumbra apakšu pie zemes (līdz 4 m), LiDAR atzīmē punktu (dzeltena lodīte).
+2. **Caurmērs** — 1–3 m no koka paceļ tēmēkli līdz „1,30 m virs pamatnes” (zaļš), spied „Mērīt”.
+   Sekundes laikā tiek savākti LiDAR punkti ±4 cm joslā šajā augstumā, un tiem pielāgots riņķis
+   (metode „aplis”). Ja riņķis nav ticams, D aprēķina pēc stumbra leņķiskā platuma (metode „malas”):
+   r = d·sin(α/2) / (1 − sin(α/2)). Zaļais disks AR skatā rāda, vai mērījums sakrīt ar stumbru.
+3. **Augstums** — atkāpies (ideāli ~ koka augstuma attālumā), tēmē galotni. ARKit seko telefona pozīcijai,
+   augstums = punkts, kur tēmēšanas stars šķērso stumbra asi, mīnus pamatnes augstums.
+
+Saglabātie koki (nogabals, nr., suga, D, H) → saraksts ar kopsavilkumu pa sugām → CSV (Excel, `;`).
+
+**Būvēšana** — Mac nav vajadzīgs. Katrs `ios/` izmaiņu push uz `main` palaiž GitHub Actions
+(`.github/workflows/ios.yml`): XcodeGen → xcodebuild bez parakstīšanas → `KokuMeritajs.ipa`
+relīzē [ios-latest](https://github.com/frajanko/skerslaukums/releases/tag/ios-latest).
+
+**Instalēšana ar Sideloadly (Windows, bez maksas)**
+1. Uzinstalē iTunes un iCloud no apple.com (ne Microsoft Store versijas) un [Sideloadly](https://sideloadly.io).
+2. Lejupielādē `KokuMeritajs.ipa` no relīzes *ios-latest*.
+3. Pieslēdz iPhone ar kabeli, telefonā apstiprini „Uzticēties šim datoram”.
+4. Sideloadly: ievelc `.ipa`, ievadi savu Apple ID, spied **Start**.
+5. iPhone: Iestatījumi → Konfidencialitāte un drošība → **Izstrādātāja režīms** → ieslēgt (restartējas).
+   Iestatījumi → Vispārīgi → VPN un ierīču pārvaldība → uzticies savam Apple ID.
+6. Bezmaksas Apple ID paraksts der **7 dienas** — pēc tam atkārto 4. soli (dati telefonā saglabājas).
+   Sideloadly var to darīt automātiski pa Wi-Fi, ja dators ir ieslēgts.
+
+Pirmajos mērījumos salīdzini ar dastu un mērlenti — LiDAR precizitāte mežā vēl jāpārbauda.
+
 ## Faili
 | Fails | Saturs |
 |---|---|
@@ -34,5 +65,6 @@ Pārbaude: BAF 1 režīmā 10 cm plats priekšmets 5,00 m attālumā ir tieši r
 | `app.js` | kamera, sensori, zīmēšana, skaitīšana, saglabāšana, eksports |
 | `calc.js` | formulas (BAF, leņķi, slīpums, sastāvs, statistika) |
 | `sw.js`, `manifest.webmanifest`, `icons/` | bezsaistes darbība un instalēšana |
+| `ios/` | iOS LiDAR lietotne (Swift, ARKit): `Measurer.swift` mērīšana, `Depth.swift` LiDAR dati un stumbra šķēlums, `Geometry.swift` riņķa fits |
 
 Pēc failu izmaiņām `sw.js` palielini `CACHE` versiju, lai telefons ielādētu jauno versiju.
