@@ -97,6 +97,8 @@ enum TrunkSlicer {
     static let halfBand: Float = 0.04         // ±4 cm augstumā
     static let maxAz: Float = 0.6             // ±34° no tēmēšanas virziena
     static let binW: Float = 0.25 * .pi / 180
+    /// Resnākais stumbrs, ko meklē (rādiuss, m). Plašākas virsmas (krūmi, zeme, vairāki koki kopā) atmet.
+    static let maxRadius: Float = 0.6
 
     /// Atrod stumbru, uz kuru rāda `aim`, horizontālā joslā augstumā `y0`.
     static func slice(_ s: DepthSnapshot, y0: Float, aim: SIMD3<Float>) -> TrunkSlice? {
@@ -145,9 +147,17 @@ enum TrunkSlicer {
         }
         guard let c = center else { return nil }
 
-        func grow(_ step: Int) -> Int {
+        // Tikai stumbrs, uz kuru tēmē: leņķiskais platums nedrīkst pārsniegt maxRadius stumbra platumu.
+        let r0 = med[c]!
+        let halfMax = asin(min(0.95, maxRadius / (r0 + maxRadius)))
+        let maxBins = Int(2 * halfMax / binW) + 1
+
+        /// Paplašina stumbru no centra joslas, kamēr attālums mainās vienmērīgi. `wide` — virsma turpinās
+        /// tālāk par resnākā stumbra platumu (siena, krūms, vairāki koki) — tas nav viens stumbrs.
+        func grow(_ step: Int) -> (last: Int, wide: Bool) {
             var last = c, cur = med[c]!, gap = 0, i = c + step
             while i >= 0, i < nb {
+                if abs(i - c) > maxBins { return (last, true) }
                 if let m = med[i] {
                     if abs(m - cur) <= max(0.05, 0.05 * cur) { last = i; cur = m; gap = 0 } else { break }
                 } else {
@@ -156,10 +166,11 @@ enum TrunkSlicer {
                 }
                 i += step
             }
-            return last
+            return (last, i < 0 || i >= nb)
         }
-        let lo = grow(-1), hi = grow(1)
-        guard hi - lo >= 2 else { return nil }
+        let gl = grow(-1), gh = grow(1)
+        let lo = gl.last, hi = gh.last
+        guard hi - lo >= 2, !gl.wide, !gh.wide, hi - lo <= maxBins else { return nil }
 
         var pts: [SIMD2<Double>] = []
         var azMin = Float.greatestFiniteMagnitude, azMax = -Float.greatestFiniteMagnitude

@@ -78,15 +78,20 @@ struct RootView: View {
     @State private var showData = false
     @State private var showHelp = false
     @State private var windowFrame: CGRect = .zero
+    @State private var panelFrame: CGRect = .zero
 
     private var isBasal: Bool { tab == "basal" }
 
-    /// Kur ekrānā (no augšas) ir tēmēšanas punkts = kameras attēla centrs.
-    /// Šķērslaukumā — starp augšējām pogām un prizmas logu, lai logs to neaizsedz.
+    /// Kur ekrānā (no augšas) ir tēmēšanas punkts = kameras attēla centrs (tur mēra LiDAR).
+    /// Šķērslaukumā — starp augšējām pogām un prizmas logu; kokiem un parauglaukumā — starp augšējo
+    /// joslu un pogu paneli, lai panelis neaizsedz tēmēkli.
     private func aimY(_ H: CGFloat) -> CGFloat {
-        guard isBasal else { return H / 2 }
-        guard windowFrame.height > 0 else { return H * 0.34 }
-        return max(H * 0.22, (150 + windowFrame.minY) / 2)
+        if isBasal {
+            guard windowFrame.height > 0 else { return H * 0.34 }
+            return max(H * 0.22, (150 + windowFrame.minY) / 2)
+        }
+        guard panelFrame.height > 0 else { return H * 0.3 }
+        return max(H * 0.2, min(H / 2, (110 + panelFrame.minY) / 2))
     }
 
     var body: some View {
@@ -104,7 +109,7 @@ struct RootView: View {
                 if isBasal {
                     Reticle().position(x: W / 2, y: y)
                 } else {
-                    Crosshair()
+                    Crosshair().frame(width: 90, height: 90).position(x: W / 2, y: y)
                 }
             }
             .ignoresSafeArea()
@@ -128,9 +133,9 @@ struct RootView: View {
                     PrismWindow(pose: m.pose)
                     BasalPanel()
                 } else if tab == "plot" {
-                    PlotPanel()
+                    PlotPanel().reportFrame(PanelFrameKey.self)
                 } else {
-                    TreePanel()
+                    TreePanel().reportFrame(PanelFrameKey.self)
                 }
             }
             .padding(.horizontal, 12)
@@ -139,6 +144,10 @@ struct RootView: View {
         .onPreferenceChange(WindowFrameKey.self) { r in
             windowFrame = r
             Gauge.shared.setWindow(r)
+        }
+        .onPreferenceChange(PanelFrameKey.self) { r in
+            // Mazas izmaiņas ignorē, lai AR skats nedrebētu.
+            if abs(r.minY - panelFrame.minY) > 4 || panelFrame.height == 0 { panelFrame = r }
         }
         .onAppear(perform: syncActive)
         .onChange(of: tab) { syncActive() }
@@ -171,6 +180,21 @@ struct RootView: View {
             }
         }
         .foregroundStyle(.white)
+    }
+}
+
+/// Koku / parauglaukuma pogu paneļa rāmis ekrānā (globālās koordinātās).
+struct PanelFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let n = nextValue()
+        if n != .zero { value = n }
+    }
+}
+
+extension View {
+    func reportFrame<K: PreferenceKey>(_ key: K.Type) -> some View where K.Value == CGRect {
+        background(GeometryReader { g in Color.clear.preference(key: key, value: g.frame(in: .global)) })
     }
 }
 
