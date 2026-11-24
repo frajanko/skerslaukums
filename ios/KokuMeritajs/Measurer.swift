@@ -38,6 +38,9 @@ struct TreeMeasure {
     var dInfo: String? = nil
     var hM: Double? = nil
     var hDist: Double? = nil
+    /// Atsevišķie caurmēra mērījumi (cm) un stumbra ass katrā — „Mērīt vēlreiz” tos vidējo.
+    var dSamples: [Double] = []
+    var axisSamples: [SIMD2<Double>] = []
     var isEmpty: Bool { dCm == nil && hM == nil }
 }
 
@@ -114,6 +117,8 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         var edgeD: [Double] = []
         var edgeC: [SIMD2<Double>] = []
         var nearest: [Double] = []
+        /// Atkārtots mērījums tam pašam kokam (vidējos ar iepriekšējo).
+        var again = false
         static let total = 45
     }
 
@@ -298,14 +303,19 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    private func startDiameter() {
+    /// Vēlreiz izmērīt to pašu koku; rezultāts — visu mērījumu vidējais caurmērs.
+    func measureAgain() { startDiameter(again: true) }
+
+    private func startDiameter(again: Bool = false) {
         q.async {
             guard self.capture == nil else { return }
             guard let s = self.last, let aim = s.aimPoint() else {
                 self.say("LiDAR neredz stumbru — pieej tuvāk (1–3 m)")
                 return
             }
-            self.capture = Capture(y0: aim.y, aim: aim)
+            var c = Capture(y0: aim.y, aim: aim)
+            c.again = again && !self.treeQ.dSamples.isEmpty
+            self.capture = c
             DispatchQueue.main.async { self.busy = true; self.progress = 0; self.message = "Turi telefonu mierīgi…" }
         }
     }
@@ -381,15 +391,43 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         if let e = edge { info += String(format: " · malas %.1f", e * 100) }
         info += " · \(c.points.count) p."
 
-        treeQ.dCm = D * 100
+        var samples = [D * 100]
+        var axes = axis.map { [$0] } ?? []
+        var note: String? = nil
+        if c.again, let a = axis, let prev = treeQ.axisSamples.last {
+            // Vai tas pats stumbrs? Asis nedrīkst atšķirties vairāk par pusi caurmēra (min. 15 cm).
+            let gap = simd_length(a - prev)
+            if gap <= max(0.15, D / 2) {
+                samples = treeQ.dSamples + samples
+                axes = treeQ.axisSamples + axes
+            } else {
+                note = "Šķiet cits koks (\(fmt(gap, 1)) m no iepriekšējā) — vidējo nerēķina, sākts jauns koks"
+                treeQ = TreeMeasure()
+            }
+        }
+        let Dcm = samples.reduce(0, +) / Double(samples.count)
+        let Dm = Dcm / 100
+        let meanAxis = axes.isEmpty ? nil : axes.reduce(SIMD2<Double>(0, 0), +) / Double(axes.count)
+        if samples.count > 1 {
+            let spread = samples.max()! - samples.min()!
+            info = "\(samples.count) mērījumi: " + samples.map { fmt($0, 1) }.joined(separator: " · ")
+                + " → \(fmt(Dcm, 1)) · pēdējais: " + info
+            note = "Vidējais no \(samples.count) mērījumiem: \(fmt(Dcm, 1)) cm (starpība \(fmt(spread, 1)) cm)"
+                + (spread > 0.1 * Dcm ? " — liela, mēri vēlreiz" : "")
+            method += ", vid. \(samples.count)"
+        }
+
+        treeQ.dCm = Dcm
         treeQ.dMethod = method
         treeQ.dInfo = info
-        treeQ.dY = c.y0
+        treeQ.dSamples = samples
+        treeQ.axisSamples = axes
+        if samples.count == 1 || treeQ.dY == nil { treeQ.dY = c.y0 }
         treeQ.edges = nil
-        if let a = axis {
+        if let a = meanAxis {
             treeQ.axisXZ = SIMD2(Float(a.x), Float(a.y))
             if let s = last,
-               let t = Geo.tangentPoints(center: a, radius: D / 2, from: SIMD2(Double(s.camPos.x), Double(s.camPos.z))) {
+               let t = Geo.tangentPoints(center: a, radius: Dm / 2, from: SIMD2(Double(s.camPos.x), Double(s.camPos.z))) {
                 treeQ.edges = (SIMD2(Float(t.0.x), Float(t.0.y)), SIMD2(Float(t.1.x), Float(t.1.y)))
             }
         }
@@ -397,7 +435,7 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         DispatchQueue.main.async {
             self.tree = t
             self.busy = false
-            self.message = nil
+            self.message = note
             self.placeMarkers()
             Haptics.ok()
             if !self.diameterOnly { self.mode = .height }
@@ -454,14 +492,15 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    func resetTree() {
+    /// Notīra pašreizējo koku; `message` — ziņojums, ko parādīt pēc tam.
+    func resetTree(message: String? = nil) {
         q.async {
             self.treeQ = TreeMeasure()
             self.capture = nil
             DispatchQueue.main.async {
                 self.tree = TreeMeasure()
                 self.busy = false
-                self.message = nil
+                self.message = message
                 self.mode = .diameter
                 self.clearMarkers()
             }

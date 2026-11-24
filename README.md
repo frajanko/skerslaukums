@@ -43,8 +43,10 @@ Slīpums un apgrieziena aplis nāk no AR izsekošanas (kompass nav vajadzīgs).
 2. **Augstums** — atkāpies (ideāli ~ koka augstuma attālumā), tēmē galotni. ARKit seko telefona pozīcijai,
    augstums = punkts, kur tēmēšanas stars šķērso stumbra asi, mīnus zeme (1,3 m zem caurmēra mērīšanas vietas).
 
-**Tikai D** — režīms tikai caurmēru mērīšanai (bez augstuma): katrs izmērītais caurmērs uzreiz tiek saglabāts
-ar izvēlēto sugu, ↶ atsauc pēdējo saglabāto koku.
+**Tikai D** — režīms tikai caurmēru mērīšanai (bez augstuma). Nekas netiek saglabāts automātiski:
+„Saglabāt” saglabā koku; „Mērīt vēlreiz” pievieno vēl vienu mērījumu tam pašam kokam un rāda vidējo caurmēru
+(ja stumbra ass ir tālāk par ½ D / 15 cm no iepriekšējās — tas ir cits koks, vidējo nerēķina);
+„Mērīt caurmēru” vienmēr sāk jaunu koku, iepriekšējais nesaglabātais tiek izmests.
 
 **Paraugl.** — apļveida parauglaukums ar R = 12,62 m (500 m²). Tēmē uz centra mietiņa pamatni → „Atzīmēt centru”;
 AR skatā parādās laukuma robeža. Mērot caurmērus, katram kokam aprēķina horizontālo attālumu no centra līdz stumbra
