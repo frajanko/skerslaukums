@@ -26,6 +26,8 @@ struct LiveInfo {
     var detail: String = ""
     var good: Bool = false
     var warning: String? = nil
+    /// Stumbrs, uz kuru pašlaik tēmē (ass X, Z) — lai parauglaukumā zinātu, kurš koks tas ir.
+    var trunkXZ: SIMD2<Float>? = nil
 }
 
 /// Pašreizējā koka mērījumi.
@@ -276,6 +278,7 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
             }
             if let f = found {
                 let (ec, d) = f
+                info.trunkXZ = SIMD2(Float(ec.x), Float(ec.y))
                 info.main = "≈ \(fmt(d * 100, 1)) cm"
                 info.good = dist >= 0.5 && dist <= 3.5
                 let cam = SIMD2(Double(s.camPos.x), Double(s.camPos.z))

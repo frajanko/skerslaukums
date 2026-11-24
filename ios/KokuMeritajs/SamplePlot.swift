@@ -219,6 +219,8 @@ struct SampleStandGroup: Identifiable {
 final class SamplePlotModel: ObservableObject {
     @Published private(set) var plots: [SamplePlot] = []
     @Published private(set) var cur = CurrentSample()
+    /// Pieprasījums mērīt koka augstumu (no mini-kartes) — izpilda parauglaukuma panelis.
+    @Published var heightRequest: UUID? = nil
 
     private let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     private var plotsURL: URL { dir.appendingPathComponent("parauglaukumi.json") }
@@ -507,8 +509,8 @@ extension SamplePlotModel {
         let total = counted.reduce(0) { $0 + SampleArea.ba($1.dCm) }
         guard total > 0 else { return [] }
         return Dictionary(grouping: counted, by: \.species).compactMap { sp, t -> (ModelAdvice, Double)? in
-            // Kamēr koku maz, Dg vēl mainās — iesaka tikai, kad sugai ir ≥ 3 koki vai laukumā ≥ 10.
-            guard t.count >= 3 || counted.count >= 10, let dg = PlotSummary.dg(t) else { return nil }
+            // Ieteikumi mainās līdz ar Dg, kamēr mēri caurmērus — tāpēc modeļkokus labāk mērīt beigās.
+            guard let dg = PlotSummary.dg(t) else { return nil }
             let g = t.reduce(0) { $0 + SampleArea.ba($1.dCm) }
             let target = g / total >= 0.2 ? 3 : 1
             let have = cur.trees.filter { $0.species == sp && $0.hM != nil }.count
@@ -647,6 +649,37 @@ struct PlotPanel: View {
         return nil
     }
     /// Pēdējais koks, ja tam var mērīt augstumu (ir AR pozīcija šajā sesijā).
+    /// Jau izmērīts koks, uz kuru pašlaik tēmē (pēc LiDAR atrastās stumbra ass).
+    private var aimedTree: PlotTree? {
+        guard let a = m.live.trunkXZ, !m.busy else { return nil }
+        let near = sp.cur.trees
+            .filter { $0.session == m.sessionID }
+            .map { ($0, simd_length(SIMD2($0.x, $0.z) - a)) }
+            .min { $0.1 < $1.1 }
+        guard let (t, d) = near, d < max(0.25, Float(t.dCm / 200) + 0.1) else { return nil }
+        return t
+    }
+
+    /// Nākamais ieteicamais modeļkoks: vispirms izvēlētās sugas, tuvākais tev.
+    private var nextModel: PlotTree? {
+        let all = sp.modelAdvice.flatMap(\.trees).filter { $0.session == m.sessionID }
+        let mine = all.filter { $0.species == species }
+        let pool = mine.isEmpty ? all : mine
+        guard let me = m.pose.pos else { return pool.first }
+        return pool.min { simd_length(SIMD2($0.x, $0.z) - me) < simd_length(SIMD2($1.x, $1.z) - me) }
+    }
+
+    /// Modeļkoku progress sugai, piem. „Priede 1/3”.
+    private func modelProgress(_ sp_: String) -> String? {
+        guard let a = sp.modelAdvice.first(where: { $0.species == sp_ }) else { return nil }
+        return "\(Species.name(sp_)) \(min(a.have, a.target))/\(a.target)"
+    }
+
+    private func distToMe(_ t: PlotTree) -> String {
+        guard let me = m.pose.pos else { return "" }
+        return " · \(fmt(simd_length(SIMD2(t.x, t.z) - me), 0)) m"
+    }
+
     private var lastForHeight: PlotTree? {
         guard let id = lastTree, let t = sp.cur.trees.first(where: { $0.id == id }), t.session == m.sessionID else { return nil }
         return t
@@ -724,6 +757,11 @@ struct PlotPanel: View {
         .onChange(of: m.sessionID) { redraw() }
         .onChange(of: m.diameterCount) { treeMeasured() }
         .onChange(of: m.heightCount) { heightMeasured() }
+        .onChange(of: sp.heightRequest) {
+            guard let id = sp.heightRequest else { return }
+            sp.heightRequest = nil
+            if let t = sp.cur.trees.first(where: { $0.id == id }) { startHeight(t) }
+        }
         .confirmationDialog("Kurš no agrāk izmērītajiem kokiem tas ir?",
                             isPresented: Binding(get: { recoverAsk != nil }, set: { if !$0 { recoverAsk = nil } }),
                             titleVisibility: .visible, presenting: recoverAsk) { r in
@@ -760,7 +798,8 @@ struct PlotPanel: View {
                     Text(lost && pending == .none ? "AR izsekošana atiestatīta" : " ")
                         .font(.subheadline.bold()).foregroundStyle(.orange)
                 } else if let t = heightTree {
-                    Text("Modeļkoks #\(t.no) \(Species.name(t.species)) — augstums")
+                    Text("Modeļkoks #\(t.no) \(Species.name(t.species)) — augstums"
+                         + (modelProgress(t.species).map { " (\($0))" } ?? ""))
                         .font(.subheadline.bold()).foregroundStyle(.cyan)
                 } else if pending == .recover {
                     Text("Pārmēri jau izmērītu koku (vēlams tālāk no centra)")
@@ -812,14 +851,24 @@ struct PlotPanel: View {
             Button("Atcelt atjaunošanu") { pending = .none }
         } else {
             HStack(spacing: 14) {
-                if let t = lastForHeight {
-                    Button {
-                        startHeight(t)
-                    } label: {
-                        Label(t.hM != nil ? "Pārmērīt augstumu #\(t.no)"
-                                : (sp.recommendedIDs.contains(t.id) ? "Augstums #\(t.no) — ieteicams modeļkoks"
-                                   : "Augstums #\(t.no) (modeļkoks)"),
+                if let t = aimedTree {
+                    // Tēmē uz jau izmērītu koku → var uzreiz mērīt tā augstumu.
+                    Button { startHeight(t) } label: {
+                        Label((t.hM != nil ? "Pārmērīt H #\(t.no)" : "Augstums #\(t.no) \(Species.name(t.species))")
+                              + " (tēmē)",
                               systemImage: sp.recommendedIDs.contains(t.id) ? "star.fill" : "arrow.up.to.line")
+                    }
+                } else if let t = nextModel {
+                    Button { startHeight(t) } label: {
+                        Label("Modeļkoks #\(t.no) \(Species.name(t.species))"
+                              + (modelProgress(t.species).map { " · \($0.split(separator: " ").last ?? "")" } ?? "")
+                              + distToMe(t),
+                              systemImage: "star.fill")
+                    }
+                    .tint(.cyan)
+                } else if let t = lastForHeight, t.hM == nil {
+                    Button { startHeight(t) } label: {
+                        Label("Augstums #\(t.no) (modeļkoks)", systemImage: "arrow.up.to.line")
                     }
                 }
                 if !unrecovered.isEmpty {
@@ -827,7 +876,8 @@ struct PlotPanel: View {
                         Text("\(unrecovered.count) bez AR pozīcijas · ").foregroundStyle(.orange) + Text("Atjaunot")
                     }
                 }
-                if lastForHeight == nil && unrecovered.isEmpty { Text(" ") }
+                if aimedTree == nil && nextModel == nil && (lastForHeight?.hM != nil || lastForHeight == nil)
+                    && unrecovered.isEmpty { Text(" ") }
             }
         }
     }
@@ -1171,6 +1221,7 @@ struct PlotMiniMap: View {
     @EnvironmentObject var m: Measurer
     @ObservedObject var pose: Pose
     @AppStorage("plotMapBig") private var big = false
+    @State private var picked: PlotTree? = nil
 
     var body: some View {
         if let c = sp.center(session: m.sessionID) {
@@ -1185,8 +1236,24 @@ struct PlotMiniMap: View {
                 }
                 .frame(width: S, height: S)
                 .contentShape(Circle())
-                .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { big.toggle() } }
+                .onTapGesture { loc in
+                    // Lielajā kartē pieskāriens kokam → izvēlne; citur — samazina/palielina karti.
+                    if big, let t = treeAt(loc, size: CGSize(width: S, height: S), c: c.xz, trees: trees) {
+                        picked = t
+                    } else {
+                        withAnimation(.easeOut(duration: 0.15)) { big.toggle() }
+                    }
+                }
                 .accessibilityLabel("Parauglaukuma karte")
+                .confirmationDialog(picked.map { "#\($0.no) \(Species.name($0.species)) · D \(fmt($0.dCm, 1)) cm" } ?? "",
+                                    isPresented: Binding(get: { picked != nil }, set: { if !$0 { picked = nil } }),
+                                    titleVisibility: .visible, presenting: picked) { t in
+                    Button(t.hM == nil ? "Mērīt augstumu (modeļkoks)" : "Pārmērīt augstumu (H \(fmt(t.hM ?? 0, 1)) m)") {
+                        sp.heightRequest = t.id
+                    }
+                    Button(t.counted ? "Izslēgt no laukuma" : "Ieskaitīt laukumā") { sp.toggle(t.id) }
+                    Button("Atcelt", role: .cancel) {}
+                }
                 if let d = dist {
                     Text(d <= SampleArea.radius ? "līdz centram \(fmt(d, 1)) m" : "ārpus laukuma · \(fmt(d, 1)) m")
                         .font(.caption2.bold().monospacedDigit())
@@ -1198,6 +1265,32 @@ struct PlotMiniMap: View {
         }
     }
 
+    private func treeAt(_ loc: CGPoint, size: CGSize, c: SIMD2<Float>, trees: [PlotTree]) -> PlotTree? {
+        let hits = trees.map { t -> (PlotTree, CGFloat) in
+            let p = Self.project(SIMD2(t.x, t.z), c: c, size: size, headingDeg: pose.mapHeading, clamp: true)
+            return (t, hypot(p.x - loc.x, p.y - loc.y))
+        }
+        guard let best = hits.min(by: { $0.1 < $1.1 }), best.1 < 22 else { return nil }
+        return best.0
+    }
+
+    /// Pasaules punkts → kartes punkts (centrs = laukuma centrs, skatīšanās virziens uz augšu).
+    static func project(_ p: SIMD2<Float>, c: SIMD2<Float>, size: CGSize, headingDeg: Double, clamp: Bool) -> CGPoint {
+        let mid = CGPoint(x: size.width / 2, y: size.height / 2)
+        let rMax = min(size.width, size.height) / 2 - 3
+        let k = (rMax - 6) / CGFloat(SampleArea.radius)
+        let h = headingDeg * .pi / 180
+        let f = SIMD2(Float(sin(h)), Float(-cos(h)))
+        let r = SIMD2(Float(cos(h)), Float(sin(h)))
+        let v = p - c
+        var x = CGFloat(simd_dot(v, r)) * k, y = -CGFloat(simd_dot(v, f)) * k
+        if clamp {
+            let l = (x * x + y * y).squareRoot(), lim = rMax - 5
+            if l > lim { x *= lim / l; y *= lim / l }
+        }
+        return CGPoint(x: mid.x + x, y: mid.y + y)
+    }
+
     private func draw(_ ctx: GraphicsContext, size: CGSize, c: SIMD2<Float>, trees: [PlotTree], rec: Set<UUID>,
                       me: SIMD2<Float>?, headingDeg: Double) {
         let W = size.width, H = size.height
@@ -1205,18 +1298,8 @@ struct PlotMiniMap: View {
         let rMax = min(W, H) / 2 - 3
         let k = (rMax - 6) / CGFloat(SampleArea.radius)      // punkti uz metru
 
-        // Pagrieziens: telefona skatīšanās virziens (f) = uz augšu, labā puse (r) = pa labi.
-        let h = headingDeg * .pi / 180
-        let f = SIMD2(Float(sin(h)), Float(-cos(h)))
-        let r = SIMD2(Float(cos(h)), Float(sin(h)))
         func pt(_ p: SIMD2<Float>, clamp: Bool = false) -> CGPoint {
-            let v = p - c
-            var x = CGFloat(simd_dot(v, r)) * k, y = -CGFloat(simd_dot(v, f)) * k
-            if clamp {
-                let l = (x * x + y * y).squareRoot(), lim = rMax - 5
-                if l > lim { x *= lim / l; y *= lim / l }
-            }
-            return CGPoint(x: mid.x + x, y: mid.y + y)
+            Self.project(p, c: c, size: size, headingDeg: headingDeg, clamp: clamp)
         }
         func circle(_ p: CGPoint, _ rad: CGFloat) -> Path {
             Path(ellipseIn: CGRect(x: p.x - rad, y: p.y - rad, width: 2 * rad, height: 2 * rad))
