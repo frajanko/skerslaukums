@@ -46,6 +46,9 @@ struct PlotTree: Codable, Identifiable, Hashable {
     var y: Float
     var z: Float
     var session: String
+    /// Modeļkoka augstums, m, un horizontālais attālums, no kura mērīts.
+    var hM: Double? = nil
+    var hDist: Double? = nil
 
     var status: TreeStatus { SampleArea.status(dist) }
 }
@@ -83,7 +86,31 @@ struct SamplePlot: Codable, Identifiable, Hashable {
     var trees: [PlotTree]
 
     var counted: [PlotTree] { trees.filter(\.counted) }
-    var summary: PlotSummary { PlotSummary(counted) }
+    var summary: PlotSummary { PlotSummary(counted, model: trees) }
+}
+
+/// Augstuma līkne pēc Näslunda: h = 1,3 + (d / (a + b·d))², d — cm, h — m.
+/// Pielāgo ar lineāru regresiju: d / √(h − 1,3) = a + b·d.
+struct HeightCurve {
+    let a: Double
+    let b: Double
+
+    static func fit(_ pts: [(d: Double, h: Double)]) -> HeightCurve? {
+        let p = pts.filter { $0.h > 1.4 && $0.d > 0 }
+        guard p.count >= 3 else { return nil }
+        let xs = p.map(\.d), ys = p.map { $0.d / sqrt($0.h - 1.3) }
+        let mx = xs.reduce(0, +) / Double(xs.count), my = ys.reduce(0, +) / Double(ys.count)
+        let sxx = xs.reduce(0) { $0 + ($1 - mx) * ($1 - mx) }
+        guard sxx > 1e-6 else { return nil }
+        let b = zip(xs, ys).reduce(0) { $0 + ($1.0 - mx) * ($1.1 - my) } / sxx
+        return HeightCurve(a: my - b * mx, b: b)
+    }
+
+    func h(_ d: Double) -> Double? {
+        let q = a + b * d
+        guard q > 1e-6 else { return nil }
+        return 1.3 + (d / q) * (d / q)
+    }
 }
 
 /// Audzes rādītāji no ieskaitītajiem kokiem.
@@ -94,6 +121,9 @@ struct PlotSummary {
         let nHa: Double
         let gHa: Double
         let dg: Double
+        /// Sugas vidējais augstums (koka ar Dg augstums), m.
+        let h: Double?
+        let hNote: String?
     }
 
     let n: Int
@@ -102,22 +132,35 @@ struct PlotSummary {
     let dMean: Double?
     let dg: Double?
     let species: [Sp]
+    /// Modeļkoku skaits.
+    let models: Int
+    /// Audzes vidējais augstums — sugu augstumi, svērti pēc G.
+    var h: Double? {
+        let w = species.compactMap { s in s.h.map { (s.gHa, $0) } }
+        let g = w.reduce(0) { $0 + $1.0 }
+        return g > 0 ? w.reduce(0) { $0 + $1.0 * $1.1 } / g : nil
+    }
 
     var composition: String {
         Calc.composition(Dictionary(uniqueKeysWithValues: species.map { ($0.id, $0.gHa) }))
     }
 
-    /// `plots` — cik laukumos koki uzmērīti (nogabala vidējam).
-    init(_ trees: [PlotTree], plots: Int = 1) {
+    /// `plots` — cik laukumos koki uzmērīti (nogabala vidējam);
+    /// `model` — koki, starp kuriem meklē modeļkokus (arī neieskaitītie), pēc noklusējuma `trees`.
+    init(_ trees: [PlotTree], plots: Int = 1, model: [PlotTree]? = nil) {
         let k = SampleArea.perHa / Double(max(1, plots))
+        let modelTrees = (model ?? trees).filter { $0.hM != nil }
         n = trees.count
         nHa = Double(n) * k
         gHa = trees.reduce(0) { $0 + SampleArea.ba($1.dCm) } * k
         dMean = trees.isEmpty ? nil : trees.reduce(0) { $0 + $1.dCm } / Double(trees.count)
         dg = Self.dg(trees)
+        models = modelTrees.count
         species = Dictionary(grouping: trees, by: \.species).map { sp, t in
-            Sp(id: sp, n: t.count, nHa: Double(t.count) * k,
-               gHa: t.reduce(0) { $0 + SampleArea.ba($1.dCm) } * k, dg: Self.dg(t) ?? 0)
+            let dg = Self.dg(t) ?? 0
+            let hh = Self.height(model: modelTrees.filter { $0.species == sp }, dg: dg)
+            return Sp(id: sp, n: t.count, nHa: Double(t.count) * k,
+                      gHa: t.reduce(0) { $0 + SampleArea.ba($1.dCm) } * k, dg: dg, h: hh?.0, hNote: hh?.1)
         }
         .sorted { $0.gHa > $1.gHa }
     }
@@ -126,12 +169,30 @@ struct PlotSummary {
     static func dg(_ t: [PlotTree]) -> Double? {
         t.isEmpty ? nil : sqrt(t.reduce(0) { $0 + $1.dCm * $1.dCm } / Double(t.count))
     }
+
+    /// Koka ar caurmēru `dg` augstums: no augstuma līknes (≥ 3 modeļkoki ar caurmēru starpību ≥ 4 cm),
+    /// citādi — modeļkoku augstumu vidējais.
+    static func height(model: [PlotTree], dg: Double) -> (Double, String)? {
+        let pts = model.compactMap { t in t.hM.map { (d: t.dCm, h: $0) } }
+        guard !pts.isEmpty else { return nil }
+        let hs = pts.map(\.h)
+        let mean = hs.reduce(0, +) / Double(hs.count)
+        let ds = pts.map(\.d)
+        if pts.count >= 3, (ds.max()! - ds.min()!) >= 4,
+           let c = HeightCurve.fit(pts), let h = c.h(dg),
+           h > hs.min()! * 0.7, h < hs.max()! * 1.3 {
+            return (h, "līkne, \(pts.count)")
+        }
+        return (mean, "vid., \(pts.count)")
+    }
 }
 
 struct SampleStandGroup: Identifiable {
     let id: String
     var plots: [SamplePlot]
-    var summary: PlotSummary { PlotSummary(plots.flatMap(\.counted), plots: plots.count) }
+    var summary: PlotSummary {
+        PlotSummary(plots.flatMap(\.counted), plots: plots.count, model: plots.flatMap(\.trees))
+    }
 }
 
 final class SamplePlotModel: ObservableObject {
@@ -288,6 +349,13 @@ final class SamplePlotModel: ObservableObject {
         return Recovery(tree: cur.trees[i], moved: moved, rotDeg: deg, dr: abs(d - old.dist))
     }
 
+    func setHeight(_ id: UUID, h: Double?, dist: Double?) {
+        guard let i = cur.trees.firstIndex(where: { $0.id == id }) else { return }
+        cur.trees[i].hM = h
+        cur.trees[i].hDist = dist
+        saveCur()
+    }
+
     func toggle(_ id: UUID) {
         guard let i = cur.trees.firstIndex(where: { $0.id == id }) else { return }
         cur.trees[i].counted.toggle()
@@ -363,14 +431,14 @@ final class SamplePlotModel: ObservableObject {
     func csvTrees() -> String {
         let (df, tf) = Self.formatters()
         let head = ["nogabals", "laukums", "datums", "laiks", "platums", "garums", "koks_nr", "suga", "D_cm",
-                    "attalums_no_centra_m", "ieskaitits", "robezkoks", "D_metode"]
+                    "attalums_no_centra_m", "ieskaitits", "robezkoks", "D_metode", "H_m", "H_attalums_m"]
         var rows: [String] = []
         for p in plots {
             for t in p.trees {
                 rows.append([p.stand, String(p.no), df.string(from: p.date), tf.string(from: p.date),
                              Self.num(p.lat, 6), Self.num(p.lon, 6), String(t.no), t.species, Self.num(t.dCm, 1),
                              Self.num(t.dist, 2), t.counted ? "jā" : "nē", t.status == .border ? "jā" : "nē",
-                             t.dMethod ?? ""]
+                             t.dMethod ?? "", Self.num(t.hM, 1), Self.num(t.hDist, 1)]
                     .map(csvCell).joined(separator: ";"))
             }
         }
@@ -382,7 +450,7 @@ final class SamplePlotModel: ObservableObject {
         let (df, tf) = Self.formatters()
         let sp = Species.all.map(\.id)
         let head = ["nogabals", "laukums", "datums", "laiks", "platums", "garums", "gps_precizitate_m",
-                    "radiuss_m", "centra_nobide_m", "koki", "N_ha", "G_m2_ha", "D_vid_cm", "Dg_cm", "sastavs"]
+                    "radiuss_m", "centra_nobide_m", "koki", "N_ha", "G_m2_ha", "D_vid_cm", "Dg_cm", "H_m", "modelkoki", "sastavs"]
             + sp.map { "G_\($0)" }
         let rows = plots.map { p -> String in
             let s = p.summary
@@ -390,7 +458,7 @@ final class SamplePlotModel: ObservableObject {
             let r = [p.stand, String(p.no), df.string(from: p.date), tf.string(from: p.date),
                      Self.num(p.lat, 6), Self.num(p.lon, 6), Self.num(p.acc, 0), Self.num(SampleArea.radius, 2),
                      Self.num(p.drift, 2), String(s.n), Self.num(s.nHa, 0), Self.num(s.gHa, 1),
-                     Self.num(s.dMean, 1), Self.num(s.dg, 1), s.composition]
+                     Self.num(s.dMean, 1), Self.num(s.dg, 1), Self.num(s.h, 1), String(s.models), s.composition]
                 + sp.map { Self.num(g[$0] ?? 0, 1) }
             return r.map(csvCell).joined(separator: ";")
         }
@@ -461,6 +529,17 @@ extension Measurer {
             let e = ModelEntity(mesh: m, materials: [Self.mat(color, 0.9)])
             e.position = SIMD3(t.x, t.y, t.z)
             anchor.addChild(e)
+            if let h = t.hM {
+                // Modeļkoks: sarkans stabs no zemes līdz galotnei.
+                let base = t.y - Self.breastHeight
+                let pole = ModelEntity(mesh: .generateCylinder(height: Float(h), radius: 0.012),
+                                       materials: [Self.mat(.systemRed, 0.55)])
+                pole.position = SIMD3(t.x, base + Float(h) / 2, t.z)
+                anchor.addChild(pole)
+                let top = ModelEntity(mesh: .generateSphere(radius: 0.12), materials: [Self.mat(.systemRed, 0.8)])
+                top.position = SIMD3(t.x, base + Float(h), t.z)
+                anchor.addChild(top)
+            }
         }
         view.scene.addAnchor(anchor)
         plotAnchor = anchor
@@ -476,8 +555,10 @@ struct PlotPanel: View {
     @AppStorage("species") private var species = "P"
     @AppStorage("stand") private var stand = ""
 
-    private enum Pending { case none, markCenter, checkCenter, recover }
+    private enum Pending: Equatable { case none, markCenter, checkCenter, recover, height(UUID) }
     @State private var pending: Pending = .none
+    /// Pēdējais izmērītais koks — tam var uzreiz izmērīt augstumu.
+    @State private var lastTree: UUID? = nil
     @State private var showTrees = false
     @State private var confirmDiscard = false
 
@@ -496,9 +577,18 @@ struct PlotPanel: View {
     private var aimingCenter: Bool { center == nil || pending == .markCenter || pending == .checkCenter }
     private var unrecovered: [PlotTree] { sp.unrecovered(session: m.sessionID) }
     private var counted: [PlotTree] { sp.cur.trees.filter(\.counted) }
+    private var heightTree: PlotTree? {
+        if case .height(let id) = pending { return sp.cur.trees.first { $0.id == id } }
+        return nil
+    }
+    /// Pēdējais koks, ja tam var mērīt augstumu (ir AR pozīcija šajā sesijā).
+    private var lastForHeight: PlotTree? {
+        guard let id = lastTree, let t = sp.cur.trees.first(where: { $0.id == id }), t.session == m.sessionID else { return nil }
+        return t
+    }
 
     var body: some View {
-        let sum = PlotSummary(counted)
+        let sum = PlotSummary(counted, model: sp.cur.trees)
         VStack(spacing: 10) {
             status
 
@@ -511,6 +601,7 @@ struct PlotPanel: View {
                 valueBox("Koki", "\(counted.count)")
                 valueBox("G, m²/ha", sum.n > 0 ? fmt(sum.gHa, 1) : "—")
                 valueBox("Dg, cm", sum.dg.map { fmt($0, 1) } ?? "—")
+                valueBox("H, m", sum.h.map { fmt($0, 1) } ?? "—")
             }
 
             SpeciesChips(species: $species,
@@ -518,6 +609,10 @@ struct PlotPanel: View {
 
             HStack(spacing: 10) {
                 Menu {
+                    Button { if let t = lastForHeight { startHeight(t) } } label: {
+                        Label("Augstums pēdējam kokam", systemImage: "arrow.up.to.line")
+                    }
+                    .disabled(lastForHeight == nil)
                     Button { undo() } label: { Label("Atsaukt pēdējo koku", systemImage: "arrow.uturn.backward") }
                         .disabled(sp.cur.trees.isEmpty)
                     Button { pending = .checkCenter } label: { Label("Pārbaudīt centra nobīdi", systemImage: "scope") }
@@ -539,7 +634,7 @@ struct PlotPanel: View {
                 Button { act() } label: {
                     Text(actionTitle).font(.headline).frame(maxWidth: .infinity, minHeight: 50)
                 }
-                .buttonStyle(.borderedProminent).tint(aimingCenter ? .orange : .green)
+                .buttonStyle(.borderedProminent).tint(aimingCenter ? .orange : (heightTree != nil ? .blue : .green))
 
                 Button { showTrees = true } label: {
                     Image(systemName: "list.number").frame(width: 44, height: 50)
@@ -563,6 +658,7 @@ struct PlotPanel: View {
         .onChange(of: sp.cur) { redraw() }
         .onChange(of: m.sessionID) { redraw() }
         .onChange(of: m.diameterCount) { treeMeasured() }
+        .onChange(of: m.heightCount) { heightMeasured() }
         .confirmationDialog("Kurš no agrāk izmērītajiem kokiem tas ir?",
                             isPresented: Binding(get: { recoverAsk != nil }, set: { if !$0 { recoverAsk = nil } }),
                             titleVisibility: .visible, presenting: recoverAsk) { r in
@@ -576,13 +672,14 @@ struct PlotPanel: View {
         } message: { r in
             Text("Izmērīts: D \(fmt(r.dCm, 1)) cm, \(fmt(r.r, 1)) m no centra")
         }
-        .sheet(isPresented: $showTrees) { PlotTreesView() }
+        .sheet(isPresented: $showTrees) { PlotTreesView(onHeight: { t in startHeight(t) }) }
         .confirmationDialog("Dzēst laukuma Nr. \(sp.cur.no) centru un \(sp.cur.trees.count) kokus?",
                             isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button("Dzēst un sākt no jauna", role: .destructive) {
                 sp.discardCurrent()
                 m.resetTree()
                 pending = .none
+                lastTree = nil
             }
         }
     }
@@ -605,6 +702,11 @@ struct PlotPanel: View {
                     Button("Atcelt") { pending = .none }.font(.footnote)
                 }
             } else {
+                if let t = heightTree {
+                    Text("Modeļkoks #\(t.no) \(Species.name(t.species)) — augstums").font(.headline).foregroundStyle(.cyan)
+                    Text("Atkāpies (ideāli ~ koka augstuma attālumā), tēmē galotni")
+                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
                 if pending == .recover {
                     Text("Pārmēri jau izmērītu koku").font(.headline).foregroundStyle(.orange)
                     Text("vēlams tālāk no centra — pēc tā atjaunos pārējo \(unrecovered.count) koku pozīcijas")
@@ -615,9 +717,20 @@ struct PlotPanel: View {
                     .foregroundStyle(m.live.good ? Color.green : Color.white)
                 Text(m.live.detail).font(.footnote).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                if pending == .recover {
+                if heightTree != nil {
+                    Button("Atcelt augstumu") { cancelHeight() }.font(.footnote)
+                } else if pending == .recover {
                     Button("Atcelt atjaunošanu") { pending = .none }.font(.footnote)
-                } else if !unrecovered.isEmpty {
+                } else if let t = lastForHeight {
+                    Button {
+                        startHeight(t)
+                    } label: {
+                        Label(t.hM == nil ? "Augstums #\(t.no) (modeļkoks)" : "Pārmērīt augstumu #\(t.no)",
+                              systemImage: "arrow.up.to.line")
+                    }
+                    .font(.footnote.bold())
+                }
+                if pending == .none, !unrecovered.isEmpty {
                     HStack(spacing: 6) {
                         Text("\(unrecovered.count) koki bez AR pozīcijas").foregroundStyle(.orange)
                         Button("Atjaunot") { pending = .recover }.bold()
@@ -637,6 +750,7 @@ struct PlotPanel: View {
         case .checkCenter: return "Pārbaudīt centru"
         case .markCenter: return "Atzīmēt centru"
         case .recover: return "Pārmērīt zināmu koku"
+        case .height: return "Atzīmēt galotni"
         case .none: return center == nil ? "Atzīmēt centru" : "Mērīt caurmēru"
         }
     }
@@ -702,6 +816,7 @@ struct PlotPanel: View {
             return
         }
         pending = .none
+        lastTree = res.tree.id
         var s = "Atjaunots pēc #\(res.tree.no): \(res.moved) koki, pagrieziens \(fmt(res.rotDeg, 0))°"
         s += "\nattāluma starpība \(fmt(res.dr * 100, 0)) cm"
         if res.dr > SampleArea.border {
@@ -720,6 +835,7 @@ struct PlotPanel: View {
             return
         }
         let t = r.tree
+        lastTree = t.id
         var s = "#\(t.no) \(Species.name(t.species)) · D \(fmt(t.dCm, 1)) cm · \(fmt(t.dist, 1)) m — \(t.status.title)"
         if case .replaced = r { s = "Pārmērīts " + s }
         if !t.counted { s += " (neskaita)" }
@@ -727,8 +843,35 @@ struct PlotPanel: View {
         m.message = s
     }
 
+    private func startHeight(_ t: PlotTree) {
+        guard t.session == m.sessionID else {
+            m.message = "Kokam #\(t.no) nav AR pozīcijas — vispirms atjauno centru"
+            Haptics.fail()
+            return
+        }
+        m.setHeightTarget(axis: SIMD2(t.x, t.z), dY: t.y)
+        pending = .height(t.id)
+        m.message = nil
+    }
+
+    private func cancelHeight() {
+        pending = .none
+        m.mode = .diameter
+    }
+
+    private func heightMeasured() {
+        guard case .height(let id) = pending, let h = m.tree.hM else { return }
+        sp.setHeight(id, h: h, dist: m.tree.hDist)
+        pending = .none
+        m.mode = .diameter
+        let no = sp.cur.trees.first { $0.id == id }?.no
+        m.message = "Modeļkoks #\(no.map(String.init) ?? "?") · H \(fmt(h, 1)) m"
+    }
+
     private func undo() {
         if let t = sp.undoLast() {
+            if heightTree == nil, case .height = pending { cancelHeight() }
+            if lastTree == t.id { lastTree = nil }
             m.resetTree()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { m.message = "Atsaukts #\(t.no)" }
         }
@@ -767,12 +910,23 @@ struct SummaryRows: View {
             Text("D̄ \(s.dMean.map { fmt($0, 1) } ?? "—") · Dg \(s.dg.map { fmt($0, 1) } ?? "—") cm")
         }
         .font(.subheadline).monospacedDigit()
+        HStack {
+            Text("H \(s.h.map { fmt($0, 1) + " m" } ?? "—")")
+            Spacer()
+            Text("modeļkoki: \(s.models)")
+        }
+        .font(.subheadline).monospacedDigit()
         ForEach(s.species) { x in
-            HStack {
-                Text(Species.name(x.id)).frame(width: 100, alignment: .leading)
-                Text("\(x.n) gab.").frame(width: 55, alignment: .leading)
-                Spacer()
-                Text("G \(fmt(x.gHa, 1)) · Dg \(fmt(x.dg, 1))")
+            VStack(alignment: .leading, spacing: 1) {
+                HStack {
+                    Text(Species.name(x.id)).frame(width: 100, alignment: .leading)
+                    Text("\(x.n) gab.").frame(width: 55, alignment: .leading)
+                    Spacer()
+                    Text("G \(fmt(x.gHa, 1)) · Dg \(fmt(x.dg, 1))")
+                }
+                if let h = x.h {
+                    Text("H \(fmt(h, 1)) m (\(x.hNote ?? ""))").frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
             .font(.caption).foregroundStyle(.secondary).monospacedDigit()
         }
@@ -789,7 +943,7 @@ struct PlotTreeRow: View {
             Text("#\(t.no) \(Species.name(t.species))")
             Spacer()
             VStack(alignment: .trailing) {
-                Text("D \(fmt(t.dCm, 1)) cm").monospacedDigit()
+                Text("D \(fmt(t.dCm, 1)) cm" + (t.hM.map { " · H \(fmt($0, 1)) m" } ?? "")).monospacedDigit()
                 Text("\(fmt(t.dist, 2)) m · \(t.status.title)\(t.counted ? "" : ", neskaita")")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -799,6 +953,7 @@ struct PlotTreeRow: View {
 
 /// Pašreizējā laukuma koki, rādītāji un saglabāšana.
 struct PlotTreesView: View {
+    var onHeight: (PlotTree) -> Void = { _ in }
     @EnvironmentObject var sp: SamplePlotModel
     @EnvironmentObject var m: Measurer
     @Environment(\.dismiss) private var dismiss
@@ -815,7 +970,7 @@ struct PlotTreesView: View {
                     }
                 }
                 Section("Rādītāji (R = \(fmt(SampleArea.radius, 2)) m)") {
-                    SummaryRows(s: PlotSummary(sp.cur.trees.filter(\.counted)))
+                    SummaryRows(s: PlotSummary(sp.cur.trees.filter(\.counted), model: sp.cur.trees))
                 }
                 Section {
                     ForEach(sp.cur.trees.reversed()) { t in
@@ -823,11 +978,17 @@ struct PlotTreesView: View {
                             .contentShape(Rectangle())
                             .onTapGesture { sp.toggle(t.id) }
                             .swipeActions { Button("Dzēst", role: .destructive) { sp.deleteTree(t.id) } }
+                            .swipeActions(edge: .leading) {
+                                Button("Augstums") { dismiss(); onHeight(t) }.tint(.blue)
+                                if t.hM != nil {
+                                    Button("Bez H") { sp.setHeight(t.id, h: nil, dist: nil) }.tint(.gray)
+                                }
+                            }
                     }
                 } header: {
                     Text("Koki (\(sp.cur.trees.count))")
                 } footer: {
-                    Text("Pieskaries kokam, lai to ieskaitītu vai izslēgtu (piem. robežkoku pēc pārbaudes ar mērlenti).")
+                    Text("Pieskaries kokam, lai to ieskaitītu vai izslēgtu (piem. robežkoku pēc pārbaudes ar mērlenti). Velc pa labi — modeļkoka augstums.")
                 }
                 Section {
                     Button {

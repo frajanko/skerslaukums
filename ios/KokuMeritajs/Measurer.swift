@@ -68,6 +68,8 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
     @Published var progress: Double = 0
     /// Palielinās pēc katra veiksmīga caurmēra mērījuma (lai skats var to automātiski saglabāt).
     @Published var diameterCount = 0
+    /// Palielinās pēc katras atzīmētas galotnes.
+    @Published var heightCount = 0
     /// „Tikai caurmēri”: pēc caurmēra nepāriet uz augstumu.
     var diameterOnly = false
     /// AR koordinātu sistēmas identifikators: mainās, startējot lietotni un atiestatot izsekošanu.
@@ -422,6 +424,7 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
                 self.message = "Augstums \(fmt(H, 1)) m"
                 self.placeMarkers()
                 Haptics.ok()
+                self.heightCount += 1
             }
         }
     }
@@ -431,6 +434,23 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         q.async {
             let p = self.last?.aimPoint(), c = self.last?.camPos
             DispatchQueue.main.async { done(p, c) }
+        }
+    }
+
+    /// Augstuma mērīšana jau zināmam stumbram (ass `axis`, 1,3 m augstums pasaulē `dY`).
+    func setHeightTarget(axis: SIMD2<Float>, dY: Float) {
+        q.async {
+            self.capture = nil
+            self.treeQ = TreeMeasure()
+            self.treeQ.axisXZ = axis
+            self.treeQ.dY = dY
+            let t = self.treeQ
+            DispatchQueue.main.async {
+                self.tree = t
+                self.busy = false
+                self.clearMarkers()
+                self.mode = .height
+            }
         }
     }
 
