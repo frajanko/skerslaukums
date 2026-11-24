@@ -112,6 +112,9 @@ struct RootView: View {
             VStack(spacing: 8) {
                 topBar
                 if isBasal { BasalTopRow(pose: m.pose) }
+                if tab == "plot" {
+                    HStack { Spacer(); PlotMiniMap(pose: m.pose) }
+                }
                 if let w = m.live.warning {
                     pill(w, .orange)
                 }
@@ -612,6 +615,7 @@ struct HelpView: View {
                         Text("Apļveida laukums ar rādiusu **12,62 m** (500 m²). Iesprauž mietiņu laukuma centrā, tēmē uz tā pamatni un spied „Atzīmēt centru”. AR skatā parādās oranža robeža — gredzens pie zemes un 1,3 m augstumā, ar mietiņiem ik 15°.")
                         Text("Ej no koka pie koka un mēri caurmērus (izvēlies sugu pirms mērīšanas). Kamēr tēmē, redzams stumbra attālums no centra. Izmērītos stumbrus apņem gredzens: **zaļš** — ieskaitīts, **dzeltens** — robežkoks (±30 cm), **pelēks** — ārpus laukuma. Ja to pašu koku izmēri vēlreiz, mērījums tiek aizstāts.")
                         Text("Attālumu mēra horizontāli līdz stumbra asij, tāpēc slīpumā korekcija nav vajadzīga. AR izsekošana ejot nedaudz „aizpeld”: atgriezies pie mietiņa un ⋯ → „Pārbaudīt centra nobīdi”. Ja nobīde liela, robežkokus pārbaudi ar mērlenti un sarakstā pieskaries kokam, lai to ieskaitītu vai izslēgtu.")
+                        Text("**Mini-karte** (augšā pa labi) rāda laukumu no augšas: oranža robeža, centrs (+), koki (zaļš / dzeltens / pelēks, sarkans aplis — modeļkoks) un tu (zils punkts). Karte pagriežas līdzi telefonam — tas, uz ko skaties, vienmēr ir uz augšu. Pieskaries kartei, lai to palielinātu (ar koku numuriem).")
                         Text("**Modeļkoki.** Pēc caurmēra spied „Augstums #N (modeļkoks)” (vai sarakstā velc koku pa labi → „Augstums”), atkāpies, tēmē galotni un spied „Atzīmēt galotni”. Sugas augstumu aprēķina koka ar Dg caurmēru: ja sugai ir ≥ 3 modeļkoki ar dažādiem caurmēriem — no augstuma līknes (Näslunds), citādi — modeļkoku vidējais. Audzes H — sugu augstumi, svērti pēc G. Ieteicami 3–5 modeļkoki katrai galvenajai sugai, tievi un resni.")
                         Text("**Krāja** M = G · HF, kur veidaugstumu HF ņem no tabulas „Veidaugstumi (H·f)” pēc sugas un H (9–40 m, starp veseliem metriem interpolē). Liepa, kļava u.c. — kā baltalksnis. Ja sugai nav modeļkoku, lieto audzes H (rāda „≈”); ārpus 9–40 m HF ekstrapolē.")
                         Text("**Ja AR izsekošana pazūd** (atiestatīšana, lietotne aizvērta): atzīmē centru no jauna uz tā paša mietiņa un pārmēri vienu jau izmērītu koku — vēlams tālāk no centra. Lietotne piedāvās, kurš koks tas varētu būt; pēc izvēles visu iepriekš izmērīto koku pozīcijas tiek pagrieztas atpakaļ vietā. „Attāluma starpība” rāda, cik labi sakrīt (līdz ~30 cm ir labi).")

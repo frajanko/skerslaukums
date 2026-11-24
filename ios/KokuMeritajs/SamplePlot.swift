@@ -1066,3 +1066,99 @@ struct SamplePlotDetail: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 }
+
+// MARK: - Mini-karte (skats no augšas; telefona virziens vienmēr uz augšu)
+
+struct PlotMiniMap: View {
+    @EnvironmentObject var sp: SamplePlotModel
+    @EnvironmentObject var m: Measurer
+    @ObservedObject var pose: Pose
+    @AppStorage("plotMapBig") private var big = false
+
+    var body: some View {
+        if let c = sp.center(session: m.sessionID) {
+            let S: CGFloat = big ? 250 : 130
+            let trees = sp.cur.trees.filter { $0.session == m.sessionID }
+            let me = pose.pos
+            let dist = me.map { Double(simd_length($0 - c.xz)) }
+            VStack(spacing: 3) {
+                Canvas { ctx, size in
+                    draw(ctx, size: size, c: c.xz, trees: trees, me: me, headingDeg: pose.mapHeading)
+                }
+                .frame(width: S, height: S)
+                .contentShape(Circle())
+                .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { big.toggle() } }
+                .accessibilityLabel("Parauglaukuma karte")
+                if let d = dist {
+                    Text(d <= SampleArea.radius ? "līdz centram \(fmt(d, 1)) m" : "ārpus laukuma · \(fmt(d, 1)) m")
+                        .font(.caption2.bold().monospacedDigit())
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(.black.opacity(0.5), in: Capsule())
+                        .foregroundStyle(d <= SampleArea.radius ? Color.white : Color.orange)
+                }
+            }
+        }
+    }
+
+    private func draw(_ ctx: GraphicsContext, size: CGSize, c: SIMD2<Float>, trees: [PlotTree],
+                      me: SIMD2<Float>?, headingDeg: Double) {
+        let W = size.width, H = size.height
+        let mid = CGPoint(x: W / 2, y: H / 2)
+        let rMax = min(W, H) / 2 - 3
+        let k = (rMax - 6) / CGFloat(SampleArea.radius)      // punkti uz metru
+
+        // Pagrieziens: telefona skatīšanās virziens (f) = uz augšu, labā puse (r) = pa labi.
+        let h = headingDeg * .pi / 180
+        let f = SIMD2(Float(sin(h)), Float(-cos(h)))
+        let r = SIMD2(Float(cos(h)), Float(sin(h)))
+        func pt(_ p: SIMD2<Float>, clamp: Bool = false) -> CGPoint {
+            let v = p - c
+            var x = CGFloat(simd_dot(v, r)) * k, y = -CGFloat(simd_dot(v, f)) * k
+            if clamp {
+                let l = (x * x + y * y).squareRoot(), lim = rMax - 5
+                if l > lim { x *= lim / l; y *= lim / l }
+            }
+            return CGPoint(x: mid.x + x, y: mid.y + y)
+        }
+        func circle(_ p: CGPoint, _ rad: CGFloat) -> Path {
+            Path(ellipseIn: CGRect(x: p.x - rad, y: p.y - rad, width: 2 * rad, height: 2 * rad))
+        }
+
+        ctx.fill(circle(mid, rMax), with: .color(.black.opacity(0.55)))
+        for ring in [5.0, 10.0] {
+            ctx.stroke(circle(mid, CGFloat(ring) * k), with: .color(.white.opacity(0.15)), lineWidth: 1)
+        }
+        ctx.stroke(circle(mid, CGFloat(SampleArea.radius) * k), with: .color(.orange), lineWidth: 2)
+
+        var cross = Path()
+        cross.move(to: CGPoint(x: mid.x - 5, y: mid.y)); cross.addLine(to: CGPoint(x: mid.x + 5, y: mid.y))
+        cross.move(to: CGPoint(x: mid.x, y: mid.y - 5)); cross.addLine(to: CGPoint(x: mid.x, y: mid.y + 5))
+        ctx.stroke(cross, with: .color(.orange), lineWidth: 2)
+
+        for t in trees {
+            let p = pt(SIMD2(t.x, t.z), clamp: true)
+            let rad = CGFloat(2.5 + min(t.dCm, 60) / 15) * (big ? 1.3 : 1)
+            let col: Color = !t.counted ? .gray : (t.status == .border ? .yellow : .green)
+            ctx.fill(circle(p, rad), with: .color(col))
+            if t.hM != nil {
+                ctx.stroke(circle(p, rad + 2), with: .color(.red), lineWidth: 1.5)
+            }
+            if big {
+                ctx.draw(Text("\(t.no)").font(.system(size: 9, weight: .bold)).foregroundColor(.white),
+                         at: CGPoint(x: p.x + rad + 6, y: p.y - rad - 3))
+            }
+        }
+
+        if let me {
+            let p = pt(me, clamp: true)
+            var cone = Path()
+            cone.move(to: p)
+            cone.addLine(to: CGPoint(x: p.x - 14, y: p.y - 28))
+            cone.addLine(to: CGPoint(x: p.x + 14, y: p.y - 28))
+            cone.closeSubpath()
+            ctx.fill(cone, with: .color(.blue.opacity(0.3)))
+            ctx.fill(circle(p, 5.5), with: .color(.white))
+            ctx.fill(circle(p, 4), with: .color(.blue))
+        }
+    }
+}

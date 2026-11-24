@@ -53,6 +53,8 @@ AR skatā parādās laukuma robeža. Mērot caurmērus, katram kokam aprēķina 
 asij (ARKit koordinātas) — iekšā / robežkoks (±30 cm, pārbaudīt ar mērlenti) / ārā. Atkārtoti mērīts koks tiek aizstāts.
 Rādītāji: N/ha, G m²/ha, D̄, Dg, sastāvs; nogabalam — vidējie no visiem laukumiem ar 95 % ticamības intervālu G.
 CSV: kopsavilkums pa laukumiem + visi koki.
+Mini-karte (augšā pa labi): laukums no augšas — robeža, centrs, koki pēc statusa, modeļkoki, telefona pozīcija;
+pagriezta pēc telefona virziena; pieskaroties palielinās un rāda koku numurus.
 Modeļkoki: pēc caurmēra var izmērīt koka augstumu. Sugas H = koka ar Dg augstums — no Näslunda augstuma līknes
 h = 1,3 + (d / (a + b·d))² (≥ 3 modeļkoki ar caurmēru starpību ≥ 4 cm), citādi modeļkoku vidējais; audzes H —
 sugu H, svērti pēc G. Nogabalā līkni veido no visu laukumu modeļkokiem.

@@ -50,6 +50,10 @@ final class Pose: ObservableObject {
     @Published var pitch: Double? = nil
     /// Grādi pulksteņrādītāja virzienā, relatīvi pret AR sesijas sākumu (kompass nav vajadzīgs).
     @Published var heading: Double? = nil
+    /// Pēdējais derīgais virziens (nepazūd, ja telefons skatās taisni uz leju) — mini-kartei.
+    @Published var mapHeading: Double = 0
+    /// Telefona pozīcija (pasaules X, Z), m.
+    @Published var pos: SIMD2<Float>? = nil
 }
 
 final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
@@ -192,9 +196,12 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
             let h = Double(atan2(dir.x, -dir.z)) * 180 / .pi
             heading = (h + 360).truncatingRemainder(dividingBy: 360)
         }
+        let p = SIMD2(cam.transform.columns.3.x, cam.transform.columns.3.z)
         DispatchQueue.main.async {
             self.pose.pitch = pitch
             self.pose.heading = heading
+            if let h = heading { self.pose.mapHeading = h }
+            self.pose.pos = p
         }
     }
 
