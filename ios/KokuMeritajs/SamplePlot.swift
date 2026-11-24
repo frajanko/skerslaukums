@@ -695,8 +695,13 @@ struct PlotPanel: View {
     @State private var trackingDisturbed = false
 
     var body: some View {
+        // Sadalīts daļās — garu modifikatoru ķēdi Swift kompilators nespēj laikā pārbaudīt.
+        dialogsB(dialogsA(events(panel)))
+    }
+
+    private var panel: some View {
         let sum = PlotSummary(counted, model: sp.cur.trees)
-        VStack(spacing: 10) {
+        return VStack(spacing: 10) {
             status
 
             VStack(spacing: 4) {
@@ -762,6 +767,10 @@ struct PlotPanel: View {
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
         .foregroundStyle(.white)
+    }
+
+    private func events<V: View>(_ v: V) -> some View {
+        v
         .onAppear {
             m.diameterOnly = true
             m.resetTree()
@@ -776,6 +785,10 @@ struct PlotPanel: View {
         .onChange(of: m.diameterCount) { treeMeasured() }
         .onChange(of: m.heightCount) { heightMeasured() }
         .onChange(of: m.trackingHiccups) { if center != nil { trackingDisturbed = true } }
+    }
+
+    private func dialogsA<V: View>(_ v: V) -> some View {
+        v
         .confirmationDialog(driftAsk.map { "Centra nobīde \(fmt($0.d, 1)) m" } ?? "",
                             isPresented: Binding(get: { driftAsk != nil }, set: { if !$0 { driftAsk = nil } }),
                             titleVisibility: .visible, presenting: driftAsk) { a in
@@ -811,6 +824,10 @@ struct PlotPanel: View {
         } message: { r in
             Text("Izmērīts: D \(fmt(r.dCm, 1)) cm, \(fmt(r.r, 1)) m no centra")
         }
+    }
+
+    private func dialogsB<V: View>(_ v: V) -> some View {
+        v
         .confirmationDialog("Kurš koks tas ir?",
                             isPresented: Binding(get: { pickAsk != nil }, set: { if !$0 { pickAsk = nil } }),
                             titleVisibility: .visible, presenting: pickAsk) { list in
