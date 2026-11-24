@@ -50,8 +50,10 @@ ar izvēlēto sugu, ↶ atsauc pēdējo saglabāto koku.
 AR skatā parādās laukuma robeža. Mērot caurmērus, katram kokam aprēķina horizontālo attālumu no centra līdz stumbra
 asij (ARKit koordinātas) — iekšā / robežkoks (±30 cm, pārbaudīt ar mērlenti) / ārā. Atkārtoti mērīts koks tiek aizstāts.
 Rādītāji: N/ha, G m²/ha, D̄, Dg, sastāvs; nogabalam — vidējie no visiem laukumiem ar 95 % ticamības intervālu G.
-CSV: kopsavilkums pa laukumiem + visi koki. Ja AR izsekošana tiek atiestatīta, centrs jāatzīmē no jauna (izmērītie
-koki un to attālumi saglabājas).
+CSV: kopsavilkums pa laukumiem + visi koki.
+Ja AR izsekošana tiek atiestatīta (vai lietotne aizvērta), centru atzīmē no jauna uz tā paša mietiņa un pārmēra vienu
+jau izmērītu koku: no tā vektora no centra vecajā un jaunajā sistēmā aprēķina pagriezienu ap vertikāli un pārnes
+visus iepriekšējās sesijas kokus (dublikātu atpazīšana un AR gredzeni atkal strādā).
 
 Saglabātie koki (nogabals, nr., suga, D, H) → saraksts ar kopsavilkumu pa sugām → CSV (Excel, `;`).
 

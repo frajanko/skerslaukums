@@ -67,6 +67,8 @@ struct CurrentSample: Codable, Hashable {
     var acc: Double? = nil
     var drift: Double? = nil
     var trees: [PlotTree] = []
+    /// Iepriekšējo AR sesiju centri — pēc tiem atjauno koku pozīcijas, ja izsekošana tika atiestatīta.
+    var pastCenters: [PlotCenter]? = nil
 }
 
 struct SamplePlot: Codable, Identifiable, Hashable {
@@ -158,8 +160,21 @@ final class SamplePlotModel: ObservableObject {
     }
 
     func setCenter(_ p: SIMD3<Float>, session: String, location: CLLocation?) {
-        cur.center = PlotCenter(x: p.x, y: p.y, z: p.z, session: session)
+        if let old = cur.center, old.session != session, cur.trees.contains(where: { $0.session == old.session }) {
+            var pc = cur.pastCenters ?? []
+            pc.removeAll { $0.session == old.session }
+            pc.append(old)
+            cur.pastCenters = pc
+        }
+        let c = PlotCenter(x: p.x, y: p.y, z: p.z, session: session)
+        cur.center = c
         cur.drift = nil
+        // Centrs pārlikts tajā pašā sesijā → attālumi jāpārrēķina.
+        for i in cur.trees.indices where cur.trees[i].session == session {
+            let d = Double(simd_length(SIMD2(cur.trees[i].x, cur.trees[i].z) - c.xz))
+            cur.trees[i].dist = d
+            cur.trees[i].counted = d <= SampleArea.radius
+        }
         if cur.lat == nil || cur.trees.isEmpty, let l = location {
             cur.lat = l.coordinate.latitude
             cur.lon = l.coordinate.longitude
@@ -206,6 +221,71 @@ final class SamplePlotModel: ObservableObject {
         cur.trees.append(t)
         saveCur()
         return .added(t)
+    }
+
+    // MARK: Atjaunošana pēc AR izsekošanas zuduma
+
+    func pastCenter(_ session: String) -> PlotCenter? {
+        cur.pastCenters?.first { $0.session == session }
+    }
+
+    /// Koki no iepriekšējām sesijām, kuru pozīcijas var atjaunot.
+    func unrecovered(session: String) -> [PlotTree] {
+        cur.trees.filter { $0.session != session && pastCenter($0.session) != nil }
+    }
+
+    /// Kuri no neatjaunotajiem kokiem visvairāk atbilst jaunajam mērījumam (pēc attāluma no centra un D).
+    func candidates(dCm: Double, pos: SIMD3<Float>, session: String) -> [PlotTree] {
+        guard let c = center(session: session) else { return [] }
+        let r = Double(simd_length(SIMD2(pos.x, pos.z) - c.xz))
+        func score(_ t: PlotTree) -> Double {
+            abs(t.dist - r) / 0.5 + abs(t.dCm - dCm) / max(2, 0.1 * t.dCm)
+        }
+        return Array(unrecovered(session: session).sorted { score($0) < score($1) }.prefix(4))
+    }
+
+    struct Recovery {
+        let tree: PlotTree
+        let moved: Int
+        let rotDeg: Double
+        /// Starpība starp veco un jauno attālumu no centra, m (pārbaudei).
+        let dr: Double
+    }
+
+    /// Centrs ir atzīmēts no jauna (tas pats mietiņš), un koks `id` ir pārmērīts pozīcijā `pos`.
+    /// No tā aprēķina pagriezienu starp veco un jauno AR koordinātu sistēmu un pārnes visus
+    /// tās sesijas kokus uz pašreizējo.
+    func recover(using id: UUID, dCm: Double, method: String?, pos: SIMD3<Float>, session: String) -> Recovery? {
+        guard let c1 = center(session: session),
+              let i = cur.trees.firstIndex(where: { $0.id == id }),
+              let c0 = pastCenter(cur.trees[i].session) else { return nil }
+        let old = cur.trees[i], s0 = old.session
+        let v0 = SIMD2(old.x - c0.x, old.z - c0.z)
+        let v1 = SIMD2(pos.x - c1.x, pos.z - c1.z)
+        guard simd_length(v0) > 0.5, simd_length(v1) > 0.5 else { return nil }
+        let th = atan2(v1.y, v1.x) - atan2(v0.y, v0.x)
+        let cs = cos(th), sn = sin(th)
+        var moved = 0
+        for k in cur.trees.indices where cur.trees[k].session == s0 {
+            let t = cur.trees[k]
+            let v = SIMD2(t.x - c0.x, t.z - c0.z)
+            cur.trees[k].x = c1.x + v.x * cs - v.y * sn
+            cur.trees[k].z = c1.z + v.x * sn + v.y * cs
+            cur.trees[k].y = t.y - c0.y + c1.y
+            cur.trees[k].session = session
+            moved += 1
+        }
+        // Pārmērītais koks — jaunais mērījums.
+        let d = Double(simd_length(v1))
+        cur.trees[i].x = pos.x; cur.trees[i].y = pos.y; cur.trees[i].z = pos.z
+        cur.trees[i].dCm = dCm; cur.trees[i].dMethod = method
+        cur.trees[i].dist = d; cur.trees[i].counted = d <= SampleArea.radius
+        cur.pastCenters?.removeAll { $0.session == s0 }
+        saveCur()
+        var deg = Double(th) * 180 / .pi
+        while deg > 180 { deg -= 360 }
+        while deg <= -180 { deg += 360 }
+        return Recovery(tree: cur.trees[i], moved: moved, rotDeg: deg, dr: abs(d - old.dist))
     }
 
     func toggle(_ id: UUID) {
@@ -396,14 +476,25 @@ struct PlotPanel: View {
     @AppStorage("species") private var species = "P"
     @AppStorage("stand") private var stand = ""
 
-    private enum Pending { case none, markCenter, checkCenter }
+    private enum Pending { case none, markCenter, checkCenter, recover }
     @State private var pending: Pending = .none
     @State private var showTrees = false
     @State private var confirmDiscard = false
 
+    /// Pārmērīts koks, kuru jāsasaista ar kādu no agrāk izmērītajiem.
+    private struct RecoverMeasure {
+        let dCm: Double
+        let method: String?
+        let pos: SIMD3<Float>
+        let r: Double
+        let candidates: [PlotTree]
+    }
+    @State private var recoverAsk: RecoverMeasure? = nil
+
     private var center: PlotCenter? { sp.center(session: m.sessionID) }
     private var lost: Bool { sp.cur.center != nil && center == nil }
-    private var aimingCenter: Bool { center == nil || pending != .none }
+    private var aimingCenter: Bool { center == nil || pending == .markCenter || pending == .checkCenter }
+    private var unrecovered: [PlotTree] { sp.unrecovered(session: m.sessionID) }
     private var counted: [PlotTree] { sp.cur.trees.filter(\.counted) }
 
     var body: some View {
@@ -432,6 +523,10 @@ struct PlotPanel: View {
                     Button { pending = .checkCenter } label: { Label("Pārbaudīt centra nobīdi", systemImage: "scope") }
                         .disabled(center == nil)
                     Button { pending = .markCenter } label: { Label("Atzīmēt centru no jauna", systemImage: "mappin.and.ellipse") }
+                    Button { pending = .recover } label: {
+                        Label("Atjaunot pēc zināma koka", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(center == nil || unrecovered.isEmpty)
                     Divider()
                     Button(role: .destructive) { confirmDiscard = true } label: {
                         Label("Sākt laukumu no jauna", systemImage: "trash")
@@ -468,6 +563,19 @@ struct PlotPanel: View {
         .onChange(of: sp.cur) { redraw() }
         .onChange(of: m.sessionID) { redraw() }
         .onChange(of: m.diameterCount) { treeMeasured() }
+        .confirmationDialog("Kurš no agrāk izmērītajiem kokiem tas ir?",
+                            isPresented: Binding(get: { recoverAsk != nil }, set: { if !$0 { recoverAsk = nil } }),
+                            titleVisibility: .visible, presenting: recoverAsk) { r in
+            ForEach(r.candidates) { t in
+                Button("#\(t.no) \(Species.name(t.species)) · D \(fmt(t.dCm, 1)) · \(fmt(t.dist, 1)) m") {
+                    doRecover(r, t)
+                }
+            }
+            Button("Jauns koks — pievienot") { addMeasured(r.dCm, r.method, r.pos) }
+            Button("Atcelt", role: .cancel) {}
+        } message: { r in
+            Text("Izmērīts: D \(fmt(r.dCm, 1)) cm, \(fmt(r.r, 1)) m no centra")
+        }
         .sheet(isPresented: $showTrees) { PlotTreesView() }
         .confirmationDialog("Dzēst laukuma Nr. \(sp.cur.no) centru un \(sp.cur.trees.count) kokus?",
                             isPresented: $confirmDiscard, titleVisibility: .visible) {
@@ -490,18 +598,32 @@ struct PlotPanel: View {
                 Text("Tēmē uz centra mietiņa pamatni (1–3 m) un spied pogu")
                     .font(.footnote).foregroundStyle(.secondary)
                 if lost && pending == .none {
-                    Text("AR izsekošana atiestatīta — centrs jāatzīmē no jauna. Izmērītie koki saglabājas.")
+                    Text("AR izsekošana atiestatīta — atzīmē centru no jauna (tas pats mietiņš), tad pārmēri vienu jau izmērītu koku, lai atjaunotu pārējo pozīcijas.")
                         .font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center)
                 }
                 if pending != .none {
                     Button("Atcelt") { pending = .none }.font(.footnote)
                 }
             } else {
+                if pending == .recover {
+                    Text("Pārmēri jau izmērītu koku").font(.headline).foregroundStyle(.orange)
+                    Text("vēlams tālāk no centra — pēc tā atjaunos pārējo \(unrecovered.count) koku pozīcijas")
+                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
                 Text(m.live.main.isEmpty ? " " : m.live.main)
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundStyle(m.live.good ? Color.green : Color.white)
                 Text(m.live.detail).font(.footnote).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                if pending == .recover {
+                    Button("Atcelt atjaunošanu") { pending = .none }.font(.footnote)
+                } else if !unrecovered.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("\(unrecovered.count) koki bez AR pozīcijas").foregroundStyle(.orange)
+                        Button("Atjaunot") { pending = .recover }.bold()
+                    }
+                    .font(.footnote)
+                }
             }
             if let msg = m.message {
                 Text(msg).font(.footnote.bold()).foregroundStyle(.yellow).multilineTextAlignment(.center)
@@ -514,6 +636,7 @@ struct PlotPanel: View {
         switch pending {
         case .checkCenter: return "Pārbaudīt centru"
         case .markCenter: return "Atzīmēt centru"
+        case .recover: return "Pārmērīt zināmu koku"
         case .none: return center == nil ? "Atzīmēt centru" : "Mērīt caurmēru"
         }
     }
@@ -542,18 +665,56 @@ struct PlotPanel: View {
                 let d = Double(simd_length(SIMD2(p.x, p.z) - c.xz))
                 sp.setDrift(d)
                 m.message = "Centra nobīde \(fmt(d * 100, 0)) cm" + (d > SampleArea.border ? " — robežkokus pārbaudi ar mērlenti" : "")
+                pending = .none
             } else {
                 sp.setCenter(p, session: m.sessionID, location: location.recent)
-                m.message = "Centrs atzīmēts — mēri kokus"
+                if sp.unrecovered(session: m.sessionID).isEmpty {
+                    m.message = "Centrs atzīmēts — mēri kokus"
+                    pending = .none
+                } else {
+                    m.message = "Centrs atzīmēts — tagad pārmēri vienu jau izmērītu koku"
+                    pending = .recover
+                }
             }
-            pending = .none
             Haptics.ok()
         }
     }
 
     private func treeMeasured() {
         guard let d = m.tree.dCm, let a = m.tree.axisXZ, let y = m.tree.dY else { return }
-        guard let r = sp.addTree(dCm: d, method: m.tree.dMethod, pos: SIMD3(a.x, y, a.y),
+        let pos = SIMD3(a.x, y, a.y)
+        if pending == .recover, let c = center {
+            let cand = sp.candidates(dCm: d, pos: pos, session: m.sessionID)
+            if !cand.isEmpty {
+                recoverAsk = RecoverMeasure(dCm: d, method: m.tree.dMethod, pos: pos,
+                                            r: Double(simd_length(SIMD2(pos.x, pos.z) - c.xz)), candidates: cand)
+                return
+            }
+            pending = .none
+        }
+        addMeasured(d, m.tree.dMethod, pos)
+    }
+
+    private func doRecover(_ r: RecoverMeasure, _ t: PlotTree) {
+        guard let res = sp.recover(using: t.id, dCm: r.dCm, method: r.method, pos: r.pos, session: m.sessionID) else {
+            m.message = "Neizdevās — koks ir par tuvu centram. Izvēlies koku tālāk no mietiņa."
+            Haptics.fail()
+            return
+        }
+        pending = .none
+        var s = "Atjaunots pēc #\(res.tree.no): \(res.moved) koki, pagrieziens \(fmt(res.rotDeg, 0))°"
+        s += "\nattāluma starpība \(fmt(res.dr * 100, 0)) cm"
+        if res.dr > SampleArea.border {
+            s += " — liela! Vai tas tiešām tas koks? Pārbaudi centru."
+            Haptics.fail()
+        } else {
+            Haptics.ok()
+        }
+        m.message = s
+    }
+
+    private func addMeasured(_ d: Double, _ method: String?, _ pos: SIMD3<Float>) {
+        guard let r = sp.addTree(dCm: d, method: method, pos: pos,
                                  species: species, session: m.sessionID) else {
             m.message = "Vispirms atzīmē laukuma centru"
             return
