@@ -484,7 +484,7 @@ struct DataView: View {
                             }
                             Spacer()
                             VStack(alignment: .trailing) {
-                                Text("G \(fmt(s.gHa, 1))").bold().monospacedDigit()
+                                Text("G \(fmt(s.gHa, 1))" + (s.m.map { " · M \(fmt($0, 0))" } ?? "")).bold().monospacedDigit()
                                 Text("Dg \(s.dg.map { fmt($0, 1) } ?? "—") · \(s.composition)").font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -580,6 +580,7 @@ struct HelpView: View {
                         Text("Ej no koka pie koka un mēri caurmērus (izvēlies sugu pirms mērīšanas). Kamēr tēmē, redzams stumbra attālums no centra. Izmērītos stumbrus apņem gredzens: **zaļš** — ieskaitīts, **dzeltens** — robežkoks (±30 cm), **pelēks** — ārpus laukuma. Ja to pašu koku izmēri vēlreiz, mērījums tiek aizstāts.")
                         Text("Attālumu mēra horizontāli līdz stumbra asij, tāpēc slīpumā korekcija nav vajadzīga. AR izsekošana ejot nedaudz „aizpeld”: atgriezies pie mietiņa un ⋯ → „Pārbaudīt centra nobīdi”. Ja nobīde liela, robežkokus pārbaudi ar mērlenti un sarakstā pieskaries kokam, lai to ieskaitītu vai izslēgtu.")
                         Text("**Modeļkoki.** Pēc caurmēra spied „Augstums #N (modeļkoks)” (vai sarakstā velc koku pa labi → „Augstums”), atkāpies, tēmē galotni un spied „Atzīmēt galotni”. Sugas augstumu aprēķina koka ar Dg caurmēru: ja sugai ir ≥ 3 modeļkoki ar dažādiem caurmēriem — no augstuma līknes (Näslunds), citādi — modeļkoku vidējais. Audzes H — sugu augstumi, svērti pēc G. Ieteicami 3–5 modeļkoki katrai galvenajai sugai, tievi un resni.")
+                        Text("**Krāja** M = G · HF, kur veidaugstumu HF ņem no tabulas „Veidaugstumi (H·f)” pēc sugas un H (9–40 m, starp veseliem metriem interpolē). Liepa, kļava u.c. — kā baltalksnis. Ja sugai nav modeļkoku, lieto audzes H (rāda „≈”); ārpus 9–40 m HF ekstrapolē.")
                         Text("**Ja AR izsekošana pazūd** (atiestatīšana, lietotne aizvērta): atzīmē centru no jauna uz tā paša mietiņa un pārmēri vienu jau izmērītu koku — vēlams tālāk no centra. Lietotne piedāvās, kurš koks tas varētu būt; pēc izvēles visu iepriekš izmērīto koku pozīcijas tiek pagrieztas atpakaļ vietā. „Attāluma starpība” rāda, cik labi sakrīt (līdz ~30 cm ir labi).")
                         Text("Sarakstā (☰ ar numuriem) — laukuma rādītāji: N/ha, G m²/ha, D̄, Dg, sastāvs. „Saglabāt laukumu” — un nākamais laukums. Datu sarakstā — nogabala vidējie rādītāji no visiem laukumiem un CSV eksports.")
                             .font(.footnote).foregroundStyle(.secondary)

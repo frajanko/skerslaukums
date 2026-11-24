@@ -124,6 +124,11 @@ struct PlotSummary {
         /// Sugas vidējais augstums (koka ar Dg augstums), m.
         let h: Double?
         let hNote: String?
+        /// Krāja m³/ha = G · HF(H). Ja sugai nav modeļkoku — ar audzes H (`hFromStand`).
+        var m: Double? = nil
+        var hFromStand = false
+        /// H ārpus veidaugstumu tabulas (9–40 m) — HF ekstrapolēts.
+        var hfExtrapolated = false
     }
 
     let n: Int
@@ -135,11 +140,14 @@ struct PlotSummary {
     /// Modeļkoku skaits.
     let models: Int
     /// Audzes vidējais augstums — sugu augstumi, svērti pēc G.
-    var h: Double? {
-        let w = species.compactMap { s in s.h.map { (s.gHa, $0) } }
-        let g = w.reduce(0) { $0 + $1.0 }
-        return g > 0 ? w.reduce(0) { $0 + $1.0 * $1.1 } / g : nil
+    let h: Double?
+    /// Krāja, m³/ha (nil, ja nav neviena modeļkoka).
+    var m: Double? {
+        let v = species.compactMap(\.m)
+        return v.isEmpty ? nil : v.reduce(0, +)
     }
+    /// Krāja aprēķināta ar pieņēmumiem (audzes H kādai sugai vai H ārpus tabulas).
+    var mApprox: Bool { species.contains { $0.m != nil && ($0.hFromStand || $0.hfExtrapolated) } }
 
     var composition: String {
         Calc.composition(Dictionary(uniqueKeysWithValues: species.map { ($0.id, $0.gHa) }))
@@ -156,13 +164,26 @@ struct PlotSummary {
         dMean = trees.isEmpty ? nil : trees.reduce(0) { $0 + $1.dCm } / Double(trees.count)
         dg = Self.dg(trees)
         models = modelTrees.count
-        species = Dictionary(grouping: trees, by: \.species).map { sp, t in
+        var sps = Dictionary(grouping: trees, by: \.species).map { sp, t in
             let dg = Self.dg(t) ?? 0
             let hh = Self.height(model: modelTrees.filter { $0.species == sp }, dg: dg)
             return Sp(id: sp, n: t.count, nHa: Double(t.count) * k,
                       gHa: t.reduce(0) { $0 + SampleArea.ba($1.dCm) } * k, dg: dg, h: hh?.0, hNote: hh?.1)
         }
         .sorted { $0.gHa > $1.gHa }
+
+        let w = sps.compactMap { s in s.h.map { (s.gHa, $0) } }
+        let gw = w.reduce(0) { $0 + $1.0 }
+        let standH = gw > 0 ? w.reduce(0) { $0 + $1.0 * $1.1 } / gw : nil
+        h = standH
+
+        for i in sps.indices {
+            guard let hUse = sps[i].h ?? standH, let hf = FormHeight.hf(species: sps[i].id, h: hUse) else { continue }
+            sps[i].m = sps[i].gHa * hf
+            sps[i].hFromStand = sps[i].h == nil
+            sps[i].hfExtrapolated = !FormHeight.inTable(hUse)
+        }
+        species = sps
     }
 
     /// Vidējais kvadrātiskais caurmērs (pēc šķērslaukuma).
@@ -450,16 +471,17 @@ final class SamplePlotModel: ObservableObject {
         let (df, tf) = Self.formatters()
         let sp = Species.all.map(\.id)
         let head = ["nogabals", "laukums", "datums", "laiks", "platums", "garums", "gps_precizitate_m",
-                    "radiuss_m", "centra_nobide_m", "koki", "N_ha", "G_m2_ha", "D_vid_cm", "Dg_cm", "H_m", "modelkoki", "sastavs"]
-            + sp.map { "G_\($0)" }
+                    "radiuss_m", "centra_nobide_m", "koki", "N_ha", "G_m2_ha", "D_vid_cm", "Dg_cm", "H_m", "modelkoki", "M_m3_ha", "sastavs"]
+            + sp.map { "G_\($0)" } + sp.map { "M_\($0)" }
         let rows = plots.map { p -> String in
             let s = p.summary
             let g = Dictionary(uniqueKeysWithValues: s.species.map { ($0.id, $0.gHa) })
+            let mv = Dictionary(uniqueKeysWithValues: s.species.map { ($0.id, $0.m) })
             let r = [p.stand, String(p.no), df.string(from: p.date), tf.string(from: p.date),
                      Self.num(p.lat, 6), Self.num(p.lon, 6), Self.num(p.acc, 0), Self.num(SampleArea.radius, 2),
                      Self.num(p.drift, 2), String(s.n), Self.num(s.nHa, 0), Self.num(s.gHa, 1),
-                     Self.num(s.dMean, 1), Self.num(s.dg, 1), Self.num(s.h, 1), String(s.models), s.composition]
-                + sp.map { Self.num(g[$0] ?? 0, 1) }
+                     Self.num(s.dMean, 1), Self.num(s.dg, 1), Self.num(s.h, 1), String(s.models), Self.num(s.m, 0), s.composition]
+                + sp.map { Self.num(g[$0] ?? 0, 1) } + sp.map { Self.num(mv[$0] ?? nil, 0) }
             return r.map(csvCell).joined(separator: ";")
         }
         return "\u{FEFF}" + ([head.joined(separator: ";")] + rows).joined(separator: "\r\n")
@@ -592,16 +614,16 @@ struct PlotPanel: View {
         VStack(spacing: 10) {
             status
 
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Nog. \(stand.isEmpty ? "—" : stand)")
-                    Text("Nr. \(sp.cur.no)")
+            VStack(spacing: 4) {
+                Text("Nogabals \(stand.isEmpty ? "—" : stand) · laukums Nr. \(sp.cur.no)")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    valueBox("Koki", "\(counted.count)")
+                    valueBox("G m²/ha", sum.n > 0 ? fmt(sum.gHa, 1) : "—")
+                    valueBox("Dg cm", sum.dg.map { fmt($0, 1) } ?? "—")
+                    valueBox("H m", sum.h.map { fmt($0, 1) } ?? "—")
+                    valueBox("M m³/ha", sum.m.map { (sum.mApprox ? "≈" : "") + fmt($0, 0) } ?? "—")
                 }
-                .font(.caption).foregroundStyle(.secondary)
-                valueBox("Koki", "\(counted.count)")
-                valueBox("G, m²/ha", sum.n > 0 ? fmt(sum.gHa, 1) : "—")
-                valueBox("Dg, cm", sum.dg.map { fmt($0, 1) } ?? "—")
-                valueBox("H, m", sum.h.map { fmt($0, 1) } ?? "—")
             }
 
             SpeciesChips(species: $species,
@@ -881,7 +903,7 @@ struct PlotPanel: View {
 func valueBox(_ title: String, _ value: String) -> some View {
     VStack(spacing: 0) {
         Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
-        Text(value).font(.title3.bold().monospacedDigit())
+        Text(value).font(.title3.bold().monospacedDigit()).lineLimit(1).minimumScaleFactor(0.6)
     }
     .frame(maxWidth: .infinity)
     .padding(.vertical, 4)
@@ -916,6 +938,12 @@ struct SummaryRows: View {
             Text("modeļkoki: \(s.models)")
         }
         .font(.subheadline).monospacedDigit()
+        HStack {
+            Text("M \(s.m.map { (s.mApprox ? "≈ " : "") + fmt($0, 0) + " m³/ha" } ?? "— (vajag modeļkokus)")")
+                .font(.headline)
+            Spacer()
+        }
+        .monospacedDigit()
         ForEach(s.species) { x in
             VStack(alignment: .leading, spacing: 1) {
                 HStack {
@@ -924,8 +952,16 @@ struct SummaryRows: View {
                     Spacer()
                     Text("G \(fmt(x.gHa, 1)) · Dg \(fmt(x.dg, 1))")
                 }
-                if let h = x.h {
-                    Text("H \(fmt(h, 1)) m (\(x.hNote ?? ""))").frame(maxWidth: .infinity, alignment: .trailing)
+                HStack {
+                    if let h = x.h {
+                        Text("H \(fmt(h, 1)) m (\(x.hNote ?? ""))")
+                    } else if x.hFromStand {
+                        Text("H — audzes H")
+                    }
+                    Spacer()
+                    if let m = x.m {
+                        Text("M \(fmt(m, 0)) m³/ha" + (x.hfExtrapolated ? " (ārpus tab.)" : ""))
+                    }
                 }
             }
             .font(.caption).foregroundStyle(.secondary).monospacedDigit()

@@ -54,6 +54,8 @@ CSV: kopsavilkums pa laukumiem + visi koki.
 Modeļkoki: pēc caurmēra var izmērīt koka augstumu. Sugas H = koka ar Dg augstums — no Näslunda augstuma līknes
 h = 1,3 + (d / (a + b·d))² (≥ 3 modeļkoki ar caurmēru starpību ≥ 4 cm), citādi modeļkoku vidējais; audzes H —
 sugu H, svērti pēc G. Nogabalā līkni veido no visu laukumu modeļkokiem.
+Krāja: M = Σ G_sugas · HF(sugas H), HF — veidaugstumu (H·f) tabula pēc sugas, 9–40 m (`ios/KokuMeritajs/Volume.swift`,
+lineāra interpolācija). Sugai bez modeļkokiem lieto audzes H (rezultāts atzīmēts ar „≈”).
 Ja AR izsekošana tiek atiestatīta (vai lietotne aizvērta), centru atzīmē no jauna uz tā paša mietiņa un pārmēra vienu
 jau izmērītu koku: no tā vektora no centra vecajā un jaunajā sistēmā aprēķina pagriezienu ap vertikāli un pārnes
 visus iepriekšējās sesijas kokus (dublikātu atpazīšana un AR gredzeni atkal strādā).
