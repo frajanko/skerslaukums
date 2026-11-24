@@ -222,19 +222,23 @@ struct TreePanel: View {
 
     var body: some View {
         VStack(spacing: 10) {
+            // Fiksētas rindas — panelis nemaina augstumu, pogas nekustas.
             VStack(spacing: 2) {
-                if m.busy {
-                    ProgressView(value: m.progress).tint(.green)
-                    Text("Mēra… turi tēmēkli uz stumbra").font(.headline)
-                } else {
-                    Text(m.live.main.isEmpty ? " " : m.live.main)
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(m.live.good ? Color.green : Color.white)
-                    Text(m.live.detail).font(.footnote).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+                FixedLines(1, .system(size: 28, weight: .bold, design: .rounded)) {
+                    if m.busy {
+                        ProgressView(value: m.progress).tint(.green).padding(.horizontal, 20)
+                    } else {
+                        Text(m.live.main.isEmpty ? " " : m.live.main)
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .foregroundStyle(m.live.good ? Color.green : Color.white)
+                    }
                 }
-                if let msg = m.message {
-                    Text(msg).font(.footnote.bold()).foregroundStyle(.yellow).multilineTextAlignment(.center)
+                FixedLines(2, .footnote) {
+                    Text(m.busy ? "Mēra… turi tēmēkli uz stumbra" : m.live.detail)
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                FixedLines(2, .footnote.bold()) {
+                    Text(m.message ?? " ").font(.footnote.bold()).foregroundStyle(.yellow)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -249,9 +253,7 @@ struct TreePanel: View {
                     valueBox("H, m", m.tree.hM.map { fmt($0, 1) } ?? "—")
                 }
             }
-            if let info = m.tree.dInfo {
-                Text(info).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
-            }
+            Text(m.tree.dInfo ?? " ").font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
 
             SpeciesChips(species: $species)
 
@@ -314,7 +316,8 @@ struct TreePanel: View {
     private var dOnlyButtons: some View {
         let n = m.tree.dSamples.count
         return VStack(spacing: 8) {
-            if m.tree.dCm != nil {
+            // Rinda redzama vienmēr (bez mērījuma — neaktīva), lai pogas nelēkā.
+            Group {
                 HStack(spacing: 10) {
                     Button { m.measureAgain() } label: {
                         VStack(spacing: 0) {
@@ -328,13 +331,13 @@ struct TreePanel: View {
                     Button { save() } label: {
                         VStack(spacing: 0) {
                             Text("Saglabāt").font(.headline)
-                            Text("D \(fmt(m.tree.dCm ?? 0, 1)) cm" + (n > 1 ? " (vid. \(n))" : "")).font(.caption2)
+                            Text(m.tree.dCm.map { "D \(fmt($0, 1)) cm" + (n > 1 ? " (vid. \(n))" : "") } ?? "vispirms izmēri").font(.caption2)
                         }
                         .frame(maxWidth: .infinity, minHeight: 50)
                     }
                     .buttonStyle(.borderedProminent).tint(.blue)
                 }
-                .disabled(m.busy)
+                .disabled(m.busy || m.tree.dCm == nil)
             }
             HStack(spacing: 10) {
                 Button(role: .destructive) { m.resetTree() } label: {

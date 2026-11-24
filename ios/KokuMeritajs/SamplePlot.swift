@@ -706,65 +706,85 @@ struct PlotPanel: View {
         }
     }
 
-    @ViewBuilder private var status: some View {
+    /// Statusa laukums ar fiksētām rindām (virsraksts · rādījums · 2 rindas detaļu · darbība · 2 rindas ziņojuma),
+    /// lai panelis nemaina augstumu un pogas nekustas.
+    private var status: some View {
         VStack(spacing: 2) {
-            if m.busy {
-                ProgressView(value: m.progress).tint(.green)
-                Text("Mēra… turi tēmēkli uz stumbra").font(.headline)
-            } else if aimingCenter {
-                Text(pending == .checkCenter ? "Pārbaudi centru" : "Atzīmē laukuma centru")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                Text("Tēmē uz centra mietiņa pamatni (1–3 m) un spied pogu")
-                    .font(.footnote).foregroundStyle(.secondary)
-                if lost && pending == .none {
-                    Text("AR izsekošana atiestatīta — atzīmē centru no jauna (tas pats mietiņš), tad pārmēri vienu jau izmērītu koku, lai atjaunotu pārējo pozīcijas.")
-                        .font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center)
-                }
-                if pending != .none {
-                    Button("Atcelt") { pending = .none }.font(.footnote)
-                }
-            } else {
-                if let t = heightTree {
-                    Text("Modeļkoks #\(t.no) \(Species.name(t.species)) — augstums").font(.headline).foregroundStyle(.cyan)
-                    Text("Atkāpies (ideāli ~ koka augstuma attālumā), tēmē galotni")
-                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                }
-                if pending == .recover {
-                    Text("Pārmēri jau izmērītu koku").font(.headline).foregroundStyle(.orange)
-                    Text("vēlams tālāk no centra — pēc tā atjaunos pārējo \(unrecovered.count) koku pozīcijas")
-                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                }
-                Text(m.live.main.isEmpty ? " " : m.live.main)
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .foregroundStyle(m.live.good ? Color.green : Color.white)
-                Text(m.live.detail).font(.footnote).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                if heightTree != nil {
-                    Button("Atcelt augstumu") { cancelHeight() }.font(.footnote)
+            FixedLines(1, .subheadline.bold()) {
+                if m.busy {
+                    Text("Mēra… turi tēmēkli uz stumbra").font(.subheadline.bold())
+                } else if aimingCenter {
+                    Text(lost && pending == .none ? "AR izsekošana atiestatīta" : " ")
+                        .font(.subheadline.bold()).foregroundStyle(.orange)
+                } else if let t = heightTree {
+                    Text("Modeļkoks #\(t.no) \(Species.name(t.species)) — augstums")
+                        .font(.subheadline.bold()).foregroundStyle(.cyan)
                 } else if pending == .recover {
-                    Button("Atcelt atjaunošanu") { pending = .none }.font(.footnote)
-                } else if let t = lastForHeight {
+                    Text("Pārmēri jau izmērītu koku (vēlams tālāk no centra)")
+                        .font(.subheadline.bold()).foregroundStyle(.orange)
+                }
+            }
+            FixedLines(1, .system(size: 28, weight: .bold, design: .rounded)) {
+                if m.busy {
+                    ProgressView(value: m.progress).tint(.green).padding(.horizontal, 20)
+                } else if aimingCenter {
+                    Text(pending == .checkCenter ? "Pārbaudi centru" : "Atzīmē laukuma centru")
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                } else {
+                    Text(m.live.main.isEmpty ? " " : m.live.main)
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .foregroundStyle(m.live.good ? Color.green : Color.white)
+                }
+            }
+            FixedLines(2, .footnote) {
+                Text(detailText).font(.footnote).foregroundStyle(.secondary)
+            }
+            FixedLines(1, .footnote.bold()) { actionRow }
+            FixedLines(2, .footnote.bold()) {
+                Text(m.message ?? " ").font(.footnote.bold()).foregroundStyle(.yellow)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var detailText: String {
+        if m.busy { return " " }
+        if aimingCenter {
+            var s = "Tēmē uz centra mietiņa pamatni (1–3 m) un spied pogu"
+            if lost && pending == .none { s += "; tad pārmēri vienu jau izmērītu koku" }
+            return s
+        }
+        if heightTree != nil && m.live.detail.isEmpty { return "Atkāpies (ideāli ~ koka augstuma attālumā), tēmē galotni" }
+        return m.live.detail
+    }
+
+    @ViewBuilder private var actionRow: some View {
+        if m.busy {
+            Text(" ")
+        } else if aimingCenter {
+            if pending != .none { Button("Atcelt") { pending = .none } } else { Text(" ") }
+        } else if heightTree != nil {
+            Button("Atcelt augstumu") { cancelHeight() }
+        } else if pending == .recover {
+            Button("Atcelt atjaunošanu") { pending = .none }
+        } else {
+            HStack(spacing: 14) {
+                if let t = lastForHeight {
                     Button {
                         startHeight(t)
                     } label: {
                         Label(t.hM == nil ? "Augstums #\(t.no) (modeļkoks)" : "Pārmērīt augstumu #\(t.no)",
                               systemImage: "arrow.up.to.line")
                     }
-                    .font(.footnote.bold())
                 }
-                if pending == .none, !unrecovered.isEmpty {
-                    HStack(spacing: 6) {
-                        Text("\(unrecovered.count) koki bez AR pozīcijas").foregroundStyle(.orange)
-                        Button("Atjaunot") { pending = .recover }.bold()
+                if !unrecovered.isEmpty {
+                    Button { pending = .recover } label: {
+                        Text("\(unrecovered.count) bez AR pozīcijas · ").foregroundStyle(.orange) + Text("Atjaunot")
                     }
-                    .font(.footnote)
                 }
-            }
-            if let msg = m.message {
-                Text(msg).font(.footnote.bold()).foregroundStyle(.yellow).multilineTextAlignment(.center)
+                if lastForHeight == nil && unrecovered.isEmpty { Text(" ") }
             }
         }
-        .frame(maxWidth: .infinity)
     }
 
     private var actionTitle: String {
@@ -842,7 +862,7 @@ struct PlotPanel: View {
         var s = "Atjaunots pēc #\(res.tree.no): \(res.moved) koki, pagrieziens \(fmt(res.rotDeg, 0))°"
         s += "\nattāluma starpība \(fmt(res.dr * 100, 0)) cm"
         if res.dr > SampleArea.border {
-            s += " — liela! Vai tas tiešām tas koks? Pārbaudi centru."
+            s += " — liela! Pārbaudi koku un centru."
             Haptics.fail()
         } else {
             Haptics.ok()
@@ -1160,5 +1180,32 @@ struct PlotMiniMap: View {
             ctx.fill(circle(p, 5.5), with: .color(.white))
             ctx.fill(circle(p, 4), with: .color(.blue))
         }
+    }
+}
+
+/// Satura vieta, kas vienmēr aizņem `lines` teksta rindu augstumu (saturs tiek uzlikts virsū un
+/// nemaina izkārtojumu) — lai paneļi nelēkā, mainoties ziņojumiem.
+struct FixedLines<Content: View>: View {
+    let lines: Int
+    let font: Font
+    let content: Content
+
+    init(_ lines: Int, _ font: Font, @ViewBuilder content: () -> Content) {
+        self.lines = lines
+        self.font = font
+        self.content = content()
+    }
+
+    var body: some View {
+        Text(Array(repeating: "Ag", count: lines).joined(separator: "\n"))
+            .font(font)
+            .hidden()
+            .frame(maxWidth: .infinity)
+            .overlay {
+                content
+                    .lineLimit(lines)
+                    .minimumScaleFactor(0.7)
+                    .multilineTextAlignment(.center)
+            }
     }
 }
