@@ -488,6 +488,43 @@ final class SamplePlotModel: ObservableObject {
     }
 }
 
+// MARK: - Ieteicamie modeļkoki
+
+/// Sugas augstums = koka ar Dg caurmēru augstums, tāpēc par modeļkokiem iesaka kokus ar caurmēru
+/// vistuvāk sugas Dg. Galvenajām sugām (≥ 20 % no G) — 3 modeļkoki, piemistrojumam — 1.
+struct ModelAdvice: Identifiable {
+    let species: String
+    let dg: Double
+    let have: Int
+    let target: Int
+    let trees: [PlotTree]
+    var id: String { species }
+}
+
+extension SamplePlotModel {
+    var modelAdvice: [ModelAdvice] {
+        let counted = cur.trees.filter(\.counted)
+        let total = counted.reduce(0) { $0 + SampleArea.ba($1.dCm) }
+        guard total > 0 else { return [] }
+        return Dictionary(grouping: counted, by: \.species).compactMap { sp, t -> (ModelAdvice, Double)? in
+            // Kamēr koku maz, Dg vēl mainās — iesaka tikai, kad sugai ir ≥ 3 koki vai laukumā ≥ 10.
+            guard t.count >= 3 || counted.count >= 10, let dg = PlotSummary.dg(t) else { return nil }
+            let g = t.reduce(0) { $0 + SampleArea.ba($1.dCm) }
+            let target = g / total >= 0.2 ? 3 : 1
+            let have = cur.trees.filter { $0.species == sp && $0.hM != nil }.count
+            let need = max(0, target - have)
+            let pick = t.filter { $0.hM == nil }
+                .sorted { abs($0.dCm - dg) < abs($1.dCm - dg) }
+                .prefix(need)
+            return (ModelAdvice(species: sp, dg: dg, have: have, target: target, trees: Array(pick)), g)
+        }
+        .sorted { $0.1 > $1.1 }
+        .map(\.0)
+    }
+
+    var recommendedIDs: Set<UUID> { Set(modelAdvice.flatMap { $0.trees.map(\.id) }) }
+}
+
 // MARK: - AR: laukuma robeža un izmērītie koki
 
 extension Measurer {
@@ -516,7 +553,7 @@ extension Measurer {
 
     /// Uzzīmē laukuma robežu (gredzeni pie zemes un 1,3 m augstumā, mietiņi ik 15°) un
     /// gredzenus ap izmērītajiem stumbriem. `center == nil` — notīra.
-    func drawPlot(center: SIMD3<Float>?, trees: [PlotTree]) {
+    func drawPlot(center: SIMD3<Float>?, trees: [PlotTree], recommended: Set<UUID> = []) {
         guard let view = arView else { return }
         if let a = plotAnchor { view.scene.removeAnchor(a) }
         plotAnchor = nil
@@ -551,6 +588,12 @@ extension Measurer {
             let e = ModelEntity(mesh: m, materials: [Self.mat(color, 0.9)])
             e.position = SIMD3(t.x, t.y, t.z)
             anchor.addChild(e)
+            if recommended.contains(t.id) {
+                // Ieteicams modeļkoks: otrs, gaiši zils gredzens nedaudz augstāk.
+                let r = ModelEntity(mesh: m, materials: [Self.mat(.systemCyan, 0.95)])
+                r.position = SIMD3(t.x, t.y + 0.15, t.z)
+                anchor.addChild(r)
+            }
             if let h = t.hM {
                 // Modeļkoks: sarkans stabs no zemes līdz galotnei.
                 let base = t.y - Self.breastHeight
@@ -773,8 +816,10 @@ struct PlotPanel: View {
                     Button {
                         startHeight(t)
                     } label: {
-                        Label(t.hM == nil ? "Augstums #\(t.no) (modeļkoks)" : "Pārmērīt augstumu #\(t.no)",
-                              systemImage: "arrow.up.to.line")
+                        Label(t.hM != nil ? "Pārmērīt augstumu #\(t.no)"
+                                : (sp.recommendedIDs.contains(t.id) ? "Augstums #\(t.no) — ieteicams modeļkoks"
+                                   : "Augstums #\(t.no) (modeļkoks)"),
+                              systemImage: sp.recommendedIDs.contains(t.id) ? "star.fill" : "arrow.up.to.line")
                     }
                 }
                 if !unrecovered.isEmpty {
@@ -800,7 +845,7 @@ struct PlotPanel: View {
     private func redraw() {
         let c = center
         m.plotCenter = c?.xz
-        m.drawPlot(center: c?.pos, trees: sp.cur.trees)
+        m.drawPlot(center: c?.pos, trees: sp.cur.trees, recommended: sp.recommendedIDs)
     }
 
     private func act() {
@@ -991,12 +1036,17 @@ struct SummaryRows: View {
 
 struct PlotTreeRow: View {
     let t: PlotTree
+    var recommended = false
     var body: some View {
         HStack {
             Circle()
                 .fill(!t.counted ? Color.gray : (t.status == .border ? Color.yellow : Color.green))
                 .frame(width: 10, height: 10)
             Text("#\(t.no) \(Species.name(t.species))")
+            if recommended {
+                Label("modeļkoks", systemImage: "star.fill")
+                    .font(.caption.bold()).foregroundStyle(.cyan)
+            }
             Spacer()
             VStack(alignment: .trailing) {
                 Text("D \(fmt(t.dCm, 1)) cm" + (t.hM.map { " · H \(fmt($0, 1)) m" } ?? "")).monospacedDigit()
@@ -1014,6 +1064,7 @@ struct PlotTreesView: View {
     @EnvironmentObject var m: Measurer
     @Environment(\.dismiss) private var dismiss
     @AppStorage("stand") private var stand = ""
+    private var recommended: Set<UUID> { sp.recommendedIDs }
 
     var body: some View {
         NavigationStack {
@@ -1025,12 +1076,38 @@ struct PlotTreesView: View {
                         Text("Centra nobīde \(fmt(d * 100, 0)) cm").foregroundStyle(d > SampleArea.border ? .orange : .secondary)
                     }
                 }
+                let advice = sp.modelAdvice
+                if advice.contains(where: { !$0.trees.isEmpty }) {
+                    Section {
+                        ForEach(advice.filter { !$0.trees.isEmpty }) { a in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("\(Species.name(a.species)) — Dg \(fmt(a.dg, 1)) cm · modeļkoki \(a.have)/\(a.target)")
+                                    .font(.subheadline.bold())
+                                HStack(spacing: 8) {
+                                    ForEach(a.trees) { t in
+                                        Button {
+                                            dismiss(); onHeight(t)
+                                        } label: {
+                                            Label("#\(t.no) · D \(fmt(t.dCm, 1))", systemImage: "arrow.up.to.line")
+                                                .font(.caption.bold())
+                                        }
+                                        .buttonStyle(.bordered).tint(.cyan)
+                                    }
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("Ieteicamie modeļkoki")
+                    } footer: {
+                        Text("Sugas augstums ir koka ar Dg caurmēru augstums — tāpēc iesaka kokus ar caurmēru vistuvāk Dg. Galvenajām sugām 3, piemistrojumam 1. Ja koks nav piemērots (nolūzusi galotne, nav redzama), izvēlies citu līdzīga resnuma. Pieskaries — mērīt augstumu.")
+                    }
+                }
                 Section("Rādītāji (R = \(fmt(SampleArea.radius, 2)) m)") {
                     SummaryRows(s: PlotSummary(sp.cur.trees.filter(\.counted), model: sp.cur.trees))
                 }
                 Section {
                     ForEach(sp.cur.trees.reversed()) { t in
-                        PlotTreeRow(t: t)
+                        PlotTreeRow(t: t, recommended: recommended.contains(t.id))
                             .contentShape(Rectangle())
                             .onTapGesture { sp.toggle(t.id) }
                             .swipeActions { Button("Dzēst", role: .destructive) { sp.deleteTree(t.id) } }
@@ -1099,11 +1176,12 @@ struct PlotMiniMap: View {
         if let c = sp.center(session: m.sessionID) {
             let S: CGFloat = big ? 250 : 130
             let trees = sp.cur.trees.filter { $0.session == m.sessionID }
+            let rec = sp.recommendedIDs
             let me = pose.pos
             let dist = me.map { Double(simd_length($0 - c.xz)) }
             VStack(spacing: 3) {
                 Canvas { ctx, size in
-                    draw(ctx, size: size, c: c.xz, trees: trees, me: me, headingDeg: pose.mapHeading)
+                    draw(ctx, size: size, c: c.xz, trees: trees, rec: rec, me: me, headingDeg: pose.mapHeading)
                 }
                 .frame(width: S, height: S)
                 .contentShape(Circle())
@@ -1120,7 +1198,7 @@ struct PlotMiniMap: View {
         }
     }
 
-    private func draw(_ ctx: GraphicsContext, size: CGSize, c: SIMD2<Float>, trees: [PlotTree],
+    private func draw(_ ctx: GraphicsContext, size: CGSize, c: SIMD2<Float>, trees: [PlotTree], rec: Set<UUID>,
                       me: SIMD2<Float>?, headingDeg: Double) {
         let W = size.width, H = size.height
         let mid = CGPoint(x: W / 2, y: H / 2)
@@ -1162,6 +1240,8 @@ struct PlotMiniMap: View {
             ctx.fill(circle(p, rad), with: .color(col))
             if t.hM != nil {
                 ctx.stroke(circle(p, rad + 2), with: .color(.red), lineWidth: 1.5)
+            } else if rec.contains(t.id) {
+                ctx.stroke(circle(p, rad + 2.5), with: .color(.cyan), lineWidth: 2)
             }
             if big {
                 ctx.draw(Text("\(t.no)").font(.system(size: 9, weight: .bold)).foregroundColor(.white),
