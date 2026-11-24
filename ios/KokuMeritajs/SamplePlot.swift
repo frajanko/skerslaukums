@@ -72,6 +72,8 @@ struct CurrentSample: Codable, Hashable {
     var trees: [PlotTree] = []
     /// Iepriekšējo AR sesiju centri — pēc tiem atjauno koku pozīcijas, ja izsekošana tika atiestatīta.
     var pastCenters: [PlotCenter]? = nil
+    /// Koku skaits pēdējās centra pārbaudes brīdī (koki pēc tā vēl nav pārbaudīti pret nobīdi).
+    var checkedCount: Int? = nil
 }
 
 struct SamplePlot: Codable, Identifiable, Hashable {
@@ -258,6 +260,7 @@ final class SamplePlotModel: ObservableObject {
         let c = PlotCenter(x: p.x, y: p.y, z: p.z, session: session)
         cur.center = c
         cur.drift = nil
+        cur.checkedCount = cur.trees.count
         // Centrs pārlikts tajā pašā sesijā → attālumi jāpārrēķina.
         for i in cur.trees.indices where cur.trees[i].session == session {
             let d = Double(simd_length(SIMD2(cur.trees[i].x, cur.trees[i].z) - c.xz))
@@ -274,7 +277,42 @@ final class SamplePlotModel: ObservableObject {
 
     func setDrift(_ d: Double) {
         cur.drift = d
+        cur.checkedCount = cur.trees.count
         saveCur()
+    }
+
+    /// Cik koku izmērīts kopš pēdējās centra pārbaudes.
+    var sinceCheck: Int { cur.trees.count - min(cur.trees.count, cur.checkedCount ?? 0) }
+
+    /// AR izsekošanas nobīdes labošana. Telefons atkal notēmējis centra mietiņu punktā `observed`;
+    /// starpība Δ pret saglabāto centru ir nobīde, kas uzkrājusies kopš pēdējās pārbaudes.
+    /// Pieņem, ka tā auga vienmērīgi pa koku mērīšanas secību: k-tajam no m kokiem bija Δ·k/(m+1).
+    /// Šo koku attālumus no centra pārrēķina; visas pozīcijas pārnes uz pašreizējo AR sistēmu.
+    @discardableResult
+    func correctDrift(observed: SIMD3<Float>, session: String) -> Int {
+        guard let c = center(session: session) else { return 0 }
+        let delta = observed - c.pos
+        let i0 = min(cur.trees.count, cur.checkedCount ?? 0)
+        let after = cur.trees.indices.filter { $0 >= i0 && cur.trees[$0].session == session }
+        let m = after.count
+        var changed = 0
+        for i in cur.trees.indices where cur.trees[i].session == session {
+            var f: Float = 0
+            if let k = after.firstIndex(of: i) { f = Float(k + 1) / Float(m + 1) }
+            let p = SIMD3(cur.trees[i].x, cur.trees[i].y, cur.trees[i].z) + delta * (1 - f)
+            cur.trees[i].x = p.x; cur.trees[i].y = p.y; cur.trees[i].z = p.z
+            if f > 0 {
+                let d = Double(simd_length(SIMD2(p.x, p.z) - SIMD2(observed.x, observed.z)))
+                cur.trees[i].dist = d
+                cur.trees[i].counted = d <= SampleArea.radius
+                changed += 1
+            }
+        }
+        cur.center = PlotCenter(x: observed.x, y: observed.y, z: observed.z, session: session)
+        cur.drift = Double(simd_length(SIMD2(delta.x, delta.z)))
+        cur.checkedCount = cur.trees.count
+        saveCur()
+        return changed
     }
 
     enum AddResult {
@@ -650,6 +688,12 @@ struct PlotPanel: View {
     /// Ja koku neatpazīst — izvēle no tuvākajiem pēc pozīcijas / caurmēra.
     @State private var pickAsk: [PlotTree]? = nil
 
+    /// Centra pārbaudē atrasta liela nobīde — jautā, vai labot.
+    private struct DriftAsk { let observed: SIMD3<Float>; let d: Double; let n: Int }
+    @State private var driftAsk: DriftAsk? = nil
+    /// Izsekošana bija traucēta kopš pēdējās centra pārbaudes.
+    @State private var trackingDisturbed = false
+
     var body: some View {
         let sum = PlotSummary(counted, model: sp.cur.trees)
         VStack(spacing: 10) {
@@ -731,6 +775,24 @@ struct PlotPanel: View {
         .onChange(of: m.sessionID) { redraw() }
         .onChange(of: m.diameterCount) { treeMeasured() }
         .onChange(of: m.heightCount) { heightMeasured() }
+        .onChange(of: m.trackingHiccups) { if center != nil { trackingDisturbed = true } }
+        .confirmationDialog(driftAsk.map { "Centra nobīde \(fmt($0.d, 1)) m" } ?? "",
+                            isPresented: Binding(get: { driftAsk != nil }, set: { if !$0 { driftAsk = nil } }),
+                            titleVisibility: .visible, presenting: driftAsk) { a in
+            Button("Labot \(a.n) koku attālumus") {
+                let n = sp.correctDrift(observed: a.observed, session: m.sessionID)
+                trackingDisturbed = false
+                m.message = "Nobīde \(fmt(a.d, 1)) m izlabota (\(n) koki)" + (a.d > 1 ? " — robežkokus pārbaudi ar mērlenti" : "")
+                Haptics.ok()
+            }
+            Button("Nelabot") {
+                sp.setDrift(a.d)
+                trackingDisturbed = false
+            }
+            Button("Atcelt", role: .cancel) {}
+        } message: { a in
+            Text("AR izsekošana ir aizpeldējusi. Lietotne pārvietos centru uz mietiņu un pārrēķinās \(a.n) kopš pēdējās pārbaudes izmērīto koku attālumus (pieņemot, ka nobīde auga pakāpeniski). Iepriekšējie koki paliek, kā bija.")
+        }
         .onChange(of: sp.heightRequest) {
             guard let id = sp.heightRequest else { return }
             sp.heightRequest = nil
@@ -876,6 +938,14 @@ struct PlotPanel: View {
             Button { pending = .recover } label: {
                 Text("\(unrecovered.count) bez AR pozīcijas · ").foregroundStyle(.orange) + Text("Atjaunot")
             }
+        } else if trackingDisturbed || sp.sinceCheck >= 6 {
+            // Atgādinājums: ik pa laikam atgriezties pie mietiņa un pārbaudīt nobīdi.
+            Button { pending = .checkCenter } label: {
+                Label(trackingDisturbed ? "Izsekošana bija traucēta — pārbaudi centru"
+                                        : "Pārbaudi centru (\(sp.sinceCheck) koki kopš pārbaudes)",
+                      systemImage: "scope")
+                    .foregroundStyle(.orange)
+            }
         } else {
             Text(" ")
         }
@@ -930,8 +1000,13 @@ struct PlotPanel: View {
             }
             if checking, let c = center {
                 let d = Double(simd_length(SIMD2(p.x, p.z) - c.xz))
-                sp.setDrift(d)
-                m.message = "Centra nobīde \(fmt(d * 100, 0)) cm" + (d > SampleArea.border ? " — robežkokus pārbaudi ar mērlenti" : "")
+                if d <= 0.15 || sp.sinceCheck == 0 && d <= SampleArea.border {
+                    sp.setDrift(d)
+                    trackingDisturbed = false
+                    m.message = "Centra nobīde \(fmt(d * 100, 0)) cm — labi"
+                } else {
+                    driftAsk = DriftAsk(observed: p, d: d, n: sp.sinceCheck)
+                }
                 pending = .none
             } else {
                 sp.setCenter(p, session: m.sessionID, location: location.recent)

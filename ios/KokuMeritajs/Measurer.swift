@@ -195,6 +195,28 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
+    /// Palielinās, kad AR izsekošana tiek traucēta (pēc tā pozīcijas var būt nobīdījušās).
+    @Published var trackingHiccups = 0
+    private var trackingWasNormal = false
+
+    func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+        switch camera.trackingState {
+        case .normal:
+            trackingWasNormal = true
+        case .limited(.initializing):
+            break
+        default:
+            if trackingWasNormal {
+                trackingWasNormal = false
+                DispatchQueue.main.async { self.trackingHiccups += 1 }
+            }
+        }
+    }
+
+    func sessionWasInterrupted(_ session: ARSession) {
+        DispatchQueue.main.async { self.trackingHiccups += 1 }
+    }
+
     func session(_ session: ARSession, didFailWithError error: Error) {
         DispatchQueue.main.async { self.message = "AR kļūda: \(error.localizedDescription)" }
     }

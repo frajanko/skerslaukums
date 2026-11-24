@@ -62,6 +62,9 @@ h = 1,3 + (d / (a + b·d))² (≥ 3 koki ar caurmēru starpību ≥ 4 cm), citā
 pārējo sugu vidējais (svērts pēc G); audzes H — sugu H, svērti pēc G.
 Krāja: M = Σ G_sugas · HF(sugas H), HF — veidaugstumu (H·f) tabula pēc sugas, 9–40 m (`ios/KokuMeritajs/Volume.swift`,
 lineāra interpolācija). Sugai bez modeļkokiem lieto audzes H (rezultāts atzīmēts ar „≈”).
+Nobīde: AR izsekošana mežā aizpeld (lauka testā 4,5 m). Lietotne atgādina pārbaudīt centru ik pēc 6 kokiem vai pēc
+izsekošanas traucējuma; ja nobīde Δ > 15 cm, var labot: k-tā no m kopš pārbaudes izmērītajiem kokiem pozīcija
+p += Δ·(1 − k/(m+1)), attālums no centra pārrēķināts; centrs pārcelts uz mietiņa novērojumu.
 Ja AR izsekošana tiek atiestatīta (vai lietotne aizvērta), centru atzīmē no jauna uz tā paša mietiņa un pārmēra vienu
 jau izmērītu koku: no tā vektora no centra vecajā un jaunajā sistēmā aprēķina pagriezienu ap vertikāli un pārnes
 visus iepriekšējās sesijas kokus (dublikātu atpazīšana un AR gredzeni atkal strādā).
