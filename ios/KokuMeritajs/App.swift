@@ -208,6 +208,11 @@ struct TreePanel: View {
     @EnvironmentObject var store: TreeStore
     @AppStorage("species") private var species = "P"
     @AppStorage("stand") private var stand = ""
+    @AppStorage("dOnly") private var dOnly = false
+    /// Pēdējais automātiski saglabātais koks („Tikai D” režīmā) — to var atsaukt.
+    @State private var lastSaved: UUID? = nil
+
+    private var standCount: Int { store.trees.filter { $0.stand == stand }.count }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -231,7 +236,11 @@ struct TreePanel: View {
             HStack(spacing: 12) {
                 Text("Nogabals \(stand.isEmpty ? "—" : stand)").font(.caption).foregroundStyle(.secondary)
                 valueBox("D, cm", m.tree.dCm.map { fmt($0, 1) } ?? "—")
-                valueBox("H, m", m.tree.hM.map { fmt($0, 1) } ?? "—")
+                if dOnly {
+                    valueBox("Koki", "\(standCount)")
+                } else {
+                    valueBox("H, m", m.tree.hM.map { fmt($0, 1) } ?? "—")
+                }
             }
             if let info = m.tree.dInfo {
                 Text(info).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
@@ -239,17 +248,39 @@ struct TreePanel: View {
 
             SpeciesChips(species: $species)
 
-            Picker("Mērījums", selection: $m.mode) {
-                ForEach(Mode.allCases) { Text($0.title).tag($0) }
+            HStack(spacing: 8) {
+                if dOnly {
+                    Text("Tikai caurmēri · saglabā automātiski")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Picker("Mērījums", selection: $m.mode) {
+                        ForEach(Mode.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                Button { dOnly.toggle() } label: {
+                    Text("Tikai D").font(.subheadline.bold())
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(dOnly ? Color.green : Color.white.opacity(0.15), in: Capsule())
+                        .foregroundStyle(dOnly ? Color.black : Color.white)
+                }
             }
-            .pickerStyle(.segmented)
             .disabled(m.busy)
 
             HStack(spacing: 10) {
-                Button(role: .destructive) { m.resetTree() } label: {
-                    Image(systemName: "arrow.counterclockwise").frame(width: 44, height: 50)
+                if dOnly {
+                    Button(role: .destructive) { undoLast() } label: {
+                        Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 50)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(lastSaved == nil || m.busy)
+                } else {
+                    Button(role: .destructive) { m.resetTree() } label: {
+                        Image(systemName: "arrow.counterclockwise").frame(width: 44, height: 50)
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
 
                 Button { m.act() } label: {
                     Text(m.mode.action).font(.headline).frame(maxWidth: .infinity, minHeight: 50)
@@ -257,20 +288,44 @@ struct TreePanel: View {
                 .buttonStyle(.borderedProminent).tint(.green)
                 .disabled(m.busy)
 
-                Button {
-                    store.add(m.tree, species: species, stand: stand)
-                    m.resetTree()
-                    Haptics.ok()
-                } label: {
-                    Image(systemName: "square.and.arrow.down").frame(width: 44, height: 50)
+                if !dOnly {
+                    Button {
+                        store.add(m.tree, species: species, stand: stand)
+                        m.resetTree()
+                        Haptics.ok()
+                    } label: {
+                        Image(systemName: "square.and.arrow.down").frame(width: 44, height: 50)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(m.tree.dCm == nil && m.tree.hM == nil)
                 }
-                .buttonStyle(.bordered)
-                .disabled(m.tree.dCm == nil && m.tree.hM == nil)
             }
         }
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
         .foregroundStyle(.white)
+        .onAppear { m.diameterOnly = dOnly }
+        .onChange(of: dOnly) {
+            m.diameterOnly = dOnly
+            lastSaved = nil
+            m.resetTree()
+        }
+        .onChange(of: m.diameterCount) {
+            guard dOnly, let d = m.tree.dCm else { return }
+            var t = m.tree
+            t.hM = nil; t.hDist = nil
+            let r = store.add(t, species: species, stand: stand)
+            lastSaved = r.id
+            m.message = "Saglabāts #\(r.no) \(Species.name(r.species)) · D \(fmt(d, 1)) cm"
+        }
+    }
+
+    private func undoLast() {
+        guard let id = lastSaved else { return }
+        store.delete([id])
+        lastSaved = nil
+        m.resetTree()
+        Haptics.tap()
     }
 
     private func valueBox(_ title: String, _ value: String) -> some View {
@@ -470,6 +525,7 @@ struct HelpView: View {
                         Text("Metode „aplis” — LiDAR punktiem pielāgots riņķis; „malas” — pēc stumbra leņķiskā platuma. Lielākai precizitātei mērot nedaudz pakustini telefonu pa kreisi–pa labi.")
                             .font(.footnote).foregroundStyle(.secondary)
                         Text("**Augstums.** Atkāpies tik tālu, lai redzi galotni (attālums ≈ koka augstums ir labākais). Telefons pats seko, cik tālu esi aizgājis. Notēmē galotni un spied „Atzīmēt galotni”. Augstumu skaita no zemes, ko pieņem 1,3 m zem caurmēra mērīšanas vietas.")
+                        Text("**Tikai caurmēri.** Ieslēdz „Tikai D” — augstumu nemēra, un katrs izmērītais caurmērs uzreiz tiek saglabāts ar izvēlēto sugu. Ar ↶ atsauc pēdējo saglabāto koku.")
                         Text("Izvēlies sugu un spied ⤓, lai saglabātu koku. Sarakstā (augšā pa labi) — laukumi, koki, kopsavilkums un CSV eksports.")
                     }
                     Group {

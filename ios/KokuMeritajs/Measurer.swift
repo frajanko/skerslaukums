@@ -66,6 +66,10 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
     @Published var message: String? = nil
     @Published var busy = false
     @Published var progress: Double = 0
+    /// Palielinās pēc katra veiksmīga caurmēra mērījuma (lai skats var to automātiski saglabāt).
+    @Published var diameterCount = 0
+    /// „Tikai caurmēri”: pēc caurmēra nepāriet uz augstumu.
+    var diameterOnly = false
     let pose = Pose()
 
     /// Koku režīms ieslēgts. Šķērslaukuma režīmā LiDAR stumbra meklēšana nav vajadzīga.
@@ -370,7 +374,8 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
             self.message = nil
             self.placeMarkers()
             Haptics.ok()
-            self.mode = .height
+            if !self.diameterOnly { self.mode = .height }
+            self.diameterCount += 1
         }
     }
 

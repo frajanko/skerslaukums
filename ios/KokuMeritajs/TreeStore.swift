@@ -51,11 +51,13 @@ final class TreeStore: ObservableObject {
         (trees.filter { $0.stand == stand }.map(\.no).max() ?? 0) + 1
     }
 
-    func add(_ m: TreeMeasure, species: String, stand: String) {
+    @discardableResult
+    func add(_ m: TreeMeasure, species: String, stand: String) -> TreeRecord {
         let r = TreeRecord(stand: stand, no: nextNo(stand: stand), species: species, date: Date(),
                            dCm: m.dCm, dMethod: m.dMethod, hM: m.hM, hDist: m.hDist)
         trees.append(r)
         save()
+        return r
     }
 
     func delete(_ ids: Set<UUID>) {

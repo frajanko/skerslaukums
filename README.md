@@ -43,6 +43,9 @@ Slīpums un apgrieziena aplis nāk no AR izsekošanas (kompass nav vajadzīgs).
 2. **Augstums** — atkāpies (ideāli ~ koka augstuma attālumā), tēmē galotni. ARKit seko telefona pozīcijai,
    augstums = punkts, kur tēmēšanas stars šķērso stumbra asi, mīnus zeme (1,3 m zem caurmēra mērīšanas vietas).
 
+**Tikai D** — režīms tikai caurmēru mērīšanai (bez augstuma): katrs izmērītais caurmērs uzreiz tiek saglabāts
+ar izvēlēto sugu, ↶ atsauc pēdējo saglabāto koku.
+
 Saglabātie koki (nogabals, nr., suga, D, H) → saraksts ar kopsavilkumu pa sugām → CSV (Excel, `;`).
 
 **Būvēšana** — Mac nav vajadzīgs. Katrs `ios/` izmaiņu push uz `main` palaiž GitHub Actions
