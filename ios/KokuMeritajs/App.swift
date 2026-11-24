@@ -77,21 +77,16 @@ struct RootView: View {
     @AppStorage("tab") private var tab = "basal"
     @State private var showData = false
     @State private var showHelp = false
-    @State private var windowFrame: CGRect = .zero
     @State private var panelFrame: CGRect = .zero
 
     private var isBasal: Bool { tab == "basal" }
 
     /// Kur ekrānā (no augšas) ir tēmēšanas punkts = kameras attēla centrs (tur mēra LiDAR).
-    /// Šķērslaukumā — starp augšējām pogām un prizmas logu; kokiem un parauglaukumā — starp augšējo
-    /// joslu un pogu paneli, lai panelis neaizsedz tēmēkli.
+    /// Starp augšējo joslu (šķērslaukumā — arī BAF rindu) un pogu paneli, lai panelis neaizsedz tēmēkli.
     private func aimY(_ H: CGFloat) -> CGFloat {
-        if isBasal {
-            guard windowFrame.height > 0 else { return H * 0.34 }
-            return max(H * 0.22, (150 + windowFrame.minY) / 2)
-        }
-        guard panelFrame.height > 0 else { return H * 0.3 }
-        return max(H * 0.2, min(H / 2, (110 + panelFrame.minY) / 2))
+        let top: CGFloat = isBasal ? 150 : 110
+        guard panelFrame.height > 0 else { return H * 0.35 }
+        return max(H * 0.2, min(H / 2, (top + panelFrame.minY) / 2))
     }
 
     var body: some View {
@@ -102,12 +97,15 @@ struct RootView: View {
                 // AR skats ir garāks par ekrānu un pabīdīts uz augšu, lai tā centrs būtu pie `y`.
                 let arH = 2 * max(y, H - y)
                 let arFrame = CGRect(x: 0, y: y - arH / 2, width: W, height: arH)
-                let _ = Gauge.shared.setARFrame(arFrame)
+                let _ = Gauge.shared.setARFrame(arFrame, screenH: H)
+                // Šķērslaukumā — digitāla tālummaiņa ap tēmēšanas vietu (AR skata centru).
                 ARContainer(measurer: m)
                     .frame(width: W, height: arH)
+                    .scaleEffect(isBasal ? CGFloat(basal.zoom) : 1)
                     .position(x: W / 2, y: y)
+                    .clipped()
                 if isBasal {
-                    Reticle().position(x: W / 2, y: y)
+                    GaugeOverlay(pose: m.pose, aimY: y, screenH: H)
                 } else {
                     Crosshair().frame(width: 90, height: 90).position(x: W / 2, y: y)
                 }
@@ -130,8 +128,7 @@ struct RootView: View {
                         .transition(.opacity)
                 }
                 if isBasal {
-                    PrismWindow(pose: m.pose)
-                    BasalPanel()
+                    BasalPanel().reportFrame(PanelFrameKey.self)
                 } else if tab == "plot" {
                     PlotPanel().reportFrame(PanelFrameKey.self)
                 } else {
@@ -140,10 +137,6 @@ struct RootView: View {
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
-        }
-        .onPreferenceChange(WindowFrameKey.self) { r in
-            windowFrame = r
-            Gauge.shared.setWindow(r)
         }
         .onPreferenceChange(PanelFrameKey.self) { r in
             // Mazas izmaiņas ignorē, lai AR skats nedrebētu.
@@ -621,9 +614,9 @@ struct HelpView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     Group {
                         Text("Šķērslaukums").font(.title3.bold())
-                        Text("Bitterliha metode. Nostājies laukuma centrā un griezies ap telefonu, nevis ap sevi. Novieto apaļo tēmēkli uz stumbra 1,3 m augstumā.")
-                        Text("**Prizmas logs** (virs pogām) rāda tēmēkļa apkārtni palielinātu: augšējā pusē reālais stumbrs, apakšējā — nobīdīts par kritisko leņķi. Nobīdītais gabals vēl pārklājas ar stumbru augšā → **+1**, malas tieši sakrīt → **+½**, starp tiem sprauga → neskaita. 🔍 maina palielinājumu.")
-                        Text("**Līnijas:** logā divas līnijas; stumbrs platāks par atstarpi → +1, vienāds → +½, šaurāks → neskaita.")
+                        Text("Bitterliha metode. Nostājies laukuma centrā un griezies ap telefonu, nevis ap sevi. Novieto dzelteno joslu uz stumbra 1,3 m augstumā.")
+                        Text("**Prizma:** joslā attēls ir nobīdīts par kritisko leņķi. Nobīdītais stumbra gabals vēl pārklājas ar stumbru → **+1**, malas tieši sakrīt → **+½**, starp tiem sprauga → neskaita. Pie 1× josla ir šaura, palielinot — platāka. Tālummaiņas poga (🔍 1×/2×/3×/4×) ir apakšā pie „Saglabāt laukumu”.")
+                        Text("**Līnijas:** stumbrs platāks par atstarpi starp līnijām → +1, vienāds → +½, šaurāks → neskaita.")
                         Text("Pirms skaitīšanas izvēlies sugu. Aplis augšā pa labi rāda, cik no pilna apgrieziena jau apskatīts. G = koku skaits × BAF (m²/ha).")
                         Text("Kalibrēt nevajag — ARKit zina kameras precīzos parametrus. Slīpuma korekcija ņem telefona slīpumu no AR izsekošanas.")
                             .font(.footnote).foregroundStyle(.secondary)
