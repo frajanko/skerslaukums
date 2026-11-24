@@ -193,3 +193,108 @@ enum TrunkSlicer {
         return TrunkSlice(points: pts, edgeDiameter: D, edgeCenter: ec, nearest: nearest)
     }
 }
+
+// MARK: - Stumbra malu precizēšana kameras attēlā
+
+/// LiDAR dziļuma karte ir tikai 256×192 (~0,25° uz pikseli), un malās tās pikseļi sajaucas ar fonu
+/// (zema ticamība) — tāpēc LiDAR malas parasti ir stumbra iekšpusē un caurmērs sanāk par mazu.
+/// Kameras attēls ir 1920×1440 (~7× smalkāk): LiDAR malas projicē attēlā un tuvumā meklē
+/// spēcīgāko gaišuma pāreju (stumbrs ↔ fons). Attālumu joprojām ņem no LiDAR.
+struct ImageEdgeFit {
+    var diameter: Double            // m
+    var center: SIMD2<Double>       // stumbra ass (pasaules X, Z)
+}
+
+enum ImageEdges {
+    static func refine(frame: ARFrame, slice: TrunkSlice, y0: Float) -> ImageEdgeFit? {
+        guard let D0 = slice.edgeDiameter, let ec = slice.edgeCenter else { return nil }
+        let T = frame.camera.transform
+        let cam2 = SIMD2(Double(T.columns.3.x), Double(T.columns.3.z))
+        guard let tp = Geo.tangentPoints(center: ec, radius: D0 / 2, from: cam2) else { return nil }
+
+        let K = frame.camera.intrinsics
+        let fx = K.columns.0.x, fy = K.columns.1.y, cx = K.columns.2.x, cy = K.columns.2.y
+        let inv = T.inverse
+        func project(_ p: SIMD2<Double>) -> SIMD2<Float>? {
+            let q = inv * SIMD4(Float(p.x), y0, Float(p.y), 1)
+            let d = -q.z
+            guard d > 0.1 else { return nil }
+            return SIMD2(cx + fx * q.x / d, cy - fy * q.y / d)
+        }
+        guard let pA = project(tp.0), let pB = project(tp.1) else { return nil }
+        let seg = pB - pA
+        let len = simd_length(seg)
+        guard len > 15 else { return nil }
+        let u = seg / len
+        let n = SIMD2(-u.y, u.x)
+
+        let pb = frame.capturedImage
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+        guard CVPixelBufferGetPlaneCount(pb) >= 1,
+              let base = CVPixelBufferGetBaseAddressOfPlane(pb, 0) else { return nil }
+        let W = CVPixelBufferGetWidthOfPlane(pb, 0), H = CVPixelBufferGetHeightOfPlane(pb, 0)
+        let rb = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
+        let Y = base.assumingMemoryBound(to: UInt8.self)
+
+        // Gaišuma profils gar šķērsgriezuma līniju, vidējots ±30 px gar stumbru (mizas troksnis mazinās).
+        let s0 = -0.3 * len, s1 = 1.3 * len
+        let count = Int(s1 - s0)
+        guard count > 20 else { return nil }
+        var prof = [Float](repeating: .nan, count: count)
+        for i in 0..<count {
+            let b = pA + u * (s0 + Float(i))
+            var sum: Float = 0, cnt: Float = 0
+            for k in stride(from: -30, through: 30, by: 5) {
+                let p = b + n * Float(k)
+                let xi = Int(p.x.rounded()), yi = Int(p.y.rounded())
+                guard xi >= 0, yi >= 0, xi < W, yi < H else { continue }
+                sum += Float(Y[yi * rb + xi]); cnt += 1
+            }
+            if cnt >= 4 { prof[i] = sum / cnt }
+        }
+        // Izlīdzina (5 px) un rēķina gradientu.
+        var sm = prof
+        for i in 2..<(count - 2) {
+            let w = prof[(i - 2)...(i + 2)]
+            sm[i] = w.contains { $0.isNaN } ? .nan : w.reduce(0, +) / 5
+        }
+        func grad(_ i: Int) -> Float {
+            guard i >= 3, i < count - 3 else { return 0 }
+            let g = sm[i + 3] - sm[i - 3]
+            return g.isNaN ? 0 : abs(g)
+        }
+        /// Malas meklēšana: LiDAR mala parasti ir stumbra iekšpusē, tāpēc ārpusē meklē tālāk (15 %),
+        /// iekšpusē maz (5 %) — lai mizas rievas netiek uzskatītas par malu.
+        func edge(at e: Int, outward: Int) -> Int? {
+            let out = Int(0.15 * len), inn = Int(0.05 * len)
+            let a = outward < 0 ? e - out : e - inn
+            let b = outward < 0 ? e + inn : e + out
+            let lo = max(3, a), hi = min(count - 4, b)
+            guard lo < hi else { return nil }
+            var best = -1, bg: Float = 0
+            for i in lo...hi where grad(i) > bg { bg = grad(i); best = i }
+            return best >= 0 && bg >= 12 ? best : nil
+        }
+        let iA = Int(-s0), iB = Int(-s0 + len)
+        guard let eA = edge(at: iA, outward: -1), let eB = edge(at: iB, outward: 1) else { return nil }
+        let qA = pA + u * (s0 + Float(eA)), qB = pA + u * (s0 + Float(eB))
+
+        // Pikselis → horizontāls virziens pasaulē.
+        func azimuth(_ p: SIMD2<Float>) -> Double {
+            let d = T * SIMD4((p.x - cx) / fx, -(p.y - cy) / fy, -1, 0)
+            return atan2(Double(d.z), Double(d.x))
+        }
+        let a1 = azimuth(qA), a2 = azimuth(qB)
+        var alpha = a2 - a1
+        while alpha > .pi { alpha -= 2 * .pi }
+        while alpha < -.pi { alpha += 2 * .pi }
+        let mid = a1 + alpha / 2
+        alpha = abs(alpha)
+        guard let D = Geo.diameterFromEdges(alpha: alpha, nearest: slice.nearest) else { return nil }
+        // Nedrīkst būtiski atšķirties no LiDAR malām (citādi atrasta cita mala / fons).
+        guard D > 0.85 * D0, D < 1.3 * D0 else { return nil }
+        let L = slice.nearest + D / 2
+        return ImageEdgeFit(diameter: D, center: cam2 + L * SIMD2(cos(mid), sin(mid)))
+    }
+}

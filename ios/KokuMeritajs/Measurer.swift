@@ -121,6 +121,9 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         var edgeD: [Double] = []
         var edgeC: [SIMD2<Double>] = []
         var nearest: [Double] = []
+        /// Caurmērs un ass pēc malām kameras attēlā (precīzākais, ja izdodas).
+        var imgD: [Double] = []
+        var imgC: [SIMD2<Double>] = []
         /// Atkārtots mērījums tam pašam kokam (vidējos ar iepriekšējo).
         var again = false
         static let total = 45
@@ -176,9 +179,9 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         last = snap
 
         if capture != nil {
-            stepCapture(snap)
+            stepCapture(snap, frame)
         } else if frameNo % 6 == 0 {
-            updateLive(snap)
+            updateLive(snap, frame)
         }
     }
 
@@ -227,7 +230,26 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         treeQ.dY.map { $0 - Self.breastHeight }
     }
 
-    private func updateLive(_ s: DepthSnapshot) {
+    /// Dzīvo malu izlīdzināšana: pēdējo ~0,6 s mediāna; ja tēmē uz citu stumbru — sāk no jauna.
+    private var liveHist: [(c: SIMD2<Double>, d: Double)] = []
+    /// Cik dzīvajos kadros pēc kārtas stumbrs nav atrasts (īsus pārtraukumus nerāda — līnijas nemirgo).
+    private var liveMiss = 0
+
+    private func smoothLive(center c: SIMD2<Double>, d: Double) -> (SIMD2<Double>, Double) {
+        if let prev = smoothed(), simd_length(c - prev.0) > max(0.08, prev.1 / 2) { liveHist = [] }
+        liveHist.append((c, d))
+        if liveHist.count > 6 { liveHist.removeFirst() }
+        return smoothed() ?? (c, d)
+    }
+
+    private func smoothed() -> (SIMD2<Double>, Double)? {
+        guard !liveHist.isEmpty,
+              let x = Geo.median(liveHist.map { $0.c.x }), let z = Geo.median(liveHist.map { $0.c.y }),
+              let d = Geo.median(liveHist.map(\.d)) else { return nil }
+        return (SIMD2(x, z), d)
+    }
+
+    private func updateLive(_ s: DepthSnapshot, _ frame: ARFrame) {
         var info = LiveInfo()
         info.warning = trackingWarning(s.tracking)
         let aim = s.aimPoint()
@@ -243,7 +265,17 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
                 break
             }
             let slice = TrunkSlicer.slice(s, y0: aim.y, aim: aim)
-            if let sl = slice, let d = sl.edgeDiameter, let ec = sl.edgeCenter {
+            var found: (SIMD2<Double>, Double)? = nil
+            if let sl = slice, let d0 = sl.edgeDiameter, let ec0 = sl.edgeCenter {
+                let fit = ImageEdges.refine(frame: frame, slice: sl, y0: aim.y)
+                found = smoothLive(center: fit?.center ?? ec0, d: fit?.diameter ?? d0)
+                liveMiss = 0
+            } else {
+                liveMiss += 1
+                if liveMiss <= 3 { found = smoothed() } else { liveHist = [] }
+            }
+            if let f = found {
+                let (ec, d) = f
                 info.main = "≈ \(fmt(d * 100, 1)) cm"
                 info.good = dist >= 0.5 && dist <= 3.5
                 let cam = SIMD2(Double(s.camPos.x), Double(s.camPos.z))
@@ -256,7 +288,7 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
             }
             info.detail = "Tēmē stumbra vidū 1,3 m augstumā · attālums \(fmt(dist, 1)) m"
             if let pc = plotCenterQ {
-                let tc = slice?.edgeCenter.map { SIMD2(Float($0.x), Float($0.y)) }
+                let tc = found.map { SIMD2(Float($0.0.x), Float($0.0.y)) }
                     ?? SIMD2(aim.x, aim.z)
                 let r = Double(simd_length(tc - pc))
                 info.detail += "\nno centra \(fmt(r, 1)) m — " + SampleArea.status(r).title
@@ -327,7 +359,7 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    private func stepCapture(_ s: DepthSnapshot) {
+    private func stepCapture(_ s: DepthSnapshot, _ frame: ARFrame) {
         guard var c = capture else { return }
         c.frames += 1
         if let sl = TrunkSlicer.slice(s, y0: c.y0, aim: c.aim) {
@@ -335,6 +367,10 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
             if let d = sl.edgeDiameter { c.edgeD.append(d) }
             if let e = sl.edgeCenter { c.edgeC.append(e) }
             c.nearest.append(sl.nearest)
+            if let f = ImageEdges.refine(frame: frame, slice: sl, y0: c.y0) {
+                c.imgD.append(f.diameter)
+                c.imgC.append(f.center)
+            }
         }
         capture = c
         let p = Double(c.frames) / Double(Capture.total)
@@ -367,14 +403,20 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
             if circleOK, let e = edge, abs(2 * ci.radius - e) / e > 0.35 { circleOK = false }
         }
 
+        // Prioritāte: malas kameras attēlā (smalkākā izšķirtspēja) → LiDAR malas → aplis.
+        // Lauka pārbaudē aplis (38,2) un LiDAR malas (40,8) bija mazāki par īsto (~43–44 cm).
+        let img = c.imgD.count >= 8 ? Geo.median(c.imgD) : nil
         var d: Double? = nil, method = "", axis: SIMD2<Double>? = nil
-        if circleOK, let ci = circle {
-            d = 2 * ci.radius; method = "aplis"; axis = ci.center
+        if let im = img {
+            d = im; method = "attēls"
+            axis = c.imgC.reduce(SIMD2<Double>(0, 0), +) / Double(c.imgC.count)
         } else if let e = edge {
             d = e; method = "malas"
             if !c.edgeC.isEmpty {
                 axis = c.edgeC.reduce(SIMD2<Double>(0, 0), +) / Double(c.edgeC.count)
             }
+        } else if circleOK, let ci = circle {
+            d = 2 * ci.radius; method = "aplis"; axis = ci.center
         }
         if axis == nil, let D = d, let s = last {
             // Rezerve: tēmēšanas punkts + rādiuss prom no kameras.
@@ -394,6 +436,7 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         }
 
         var info = "\(method)"
+        if let im = img { info += String(format: " · attēls %.1f (%d k.)", im * 100, c.imgD.count) }
         if let ci = circle { info += String(format: " · aplis %.1f (±%.1f mm, %.0f°)", 2 * ci.radius * 100, ci.rms * 1000, ci.coverageDeg) }
         if let e = edge { info += String(format: " · malas %.1f", e * 100) }
         info += " · \(c.points.count) p."
