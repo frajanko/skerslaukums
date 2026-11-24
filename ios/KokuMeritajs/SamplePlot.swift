@@ -49,6 +49,10 @@ struct PlotTree: Codable, Identifiable, Hashable {
     /// Modeļkoka augstums, m, un horizontālais attālums, no kura mērīts.
     var hM: Double? = nil
     var hDist: Double? = nil
+    /// ARKit enkurs šajā pozīcijā (ARKit to pārvieto, precizējot savu karti).
+    var anchor: UUID? = nil
+    /// Ieskaitīšanu lietotājs mainījis ar roku — automātiski nepārrēķina.
+    var manual: Bool? = nil
 
     var status: TreeStatus { SampleArea.status(dist) }
 }
@@ -58,6 +62,7 @@ struct PlotCenter: Codable, Hashable {
     var y: Float
     var z: Float
     var session: String
+    var anchor: UUID? = nil
     var xz: SIMD2<Float> { SIMD2(x, z) }
     var pos: SIMD3<Float> { SIMD3(x, y, z) }
 }
@@ -229,6 +234,71 @@ final class SamplePlotModel: ObservableObject {
     /// Pieprasījums mērīt koka augstumu (no mini-kartes) — izpilda parauglaukuma panelis.
     @Published var heightRequest: UUID? = nil
 
+    // MARK: ARKit enkuri
+    // Centram un katram kokam ir ARAnchor. Kad ARKit precizē savu karti (piem. atgriežoties pie jau
+    // redzētas vietas), tas enkurus pārvieto — tad pārvieto arī centru/kokus un pārrēķina attālumus.
+    /// Izveido enkuru punktā (atgriež identifikatoru) / noņem enkuru / pašreizējā AR sesija — uzstāda panelis.
+    var addAnchor: ((SIMD3<Float>) -> UUID?)? = nil
+    var removeAnchor: ((UUID) -> Void)? = nil
+    var currentSession: (() -> String)? = nil
+    /// Kur katrs enkurs tika izveidots / pēdējo reizi pārvietots.
+    private var anchoredAt: [UUID: SIMD3<Float>] = [:]
+
+    /// Saskaņo enkurus ar pozīcijām: jauniem vai ar roku pārvietotiem punktiem — jauns enkurs; liekos noņem.
+    private func syncAnchors() {
+        guard let add = addAnchor, let session = currentSession?() else { return }
+        var used = Set<UUID>()
+        func ensure(_ pos: SIMD3<Float>, _ old: UUID?) -> UUID? {
+            if let o = old, let at = anchoredAt[o], simd_length(at - pos) < 0.01 { used.insert(o); return o }
+            if let o = old { removeAnchor?(o); anchoredAt[o] = nil }
+            guard let n = add(pos) else { return nil }
+            anchoredAt[n] = pos
+            used.insert(n)
+            return n
+        }
+        if var c = cur.center, c.session == session {
+            let a = ensure(c.pos, c.anchor)
+            if a != c.anchor { c.anchor = a; cur.center = c }
+        }
+        for i in cur.trees.indices where cur.trees[i].session == session {
+            let t = cur.trees[i]
+            let a = ensure(SIMD3(t.x, t.y, t.z), t.anchor)
+            if a != t.anchor { cur.trees[i].anchor = a }
+        }
+        for id in anchoredAt.keys where !used.contains(id) {
+            removeAnchor?(id)
+            anchoredAt[id] = nil
+        }
+    }
+
+    /// Izveido trūkstošos enkurus (piem. kad parauglaukuma panelis parādās pirmo reizi).
+    func ensureAnchors() { saveCur() }
+
+    /// ARKit pārvietojis enkurus → pārvieto centru un kokus, pārrēķina attālumus no centra.
+    func applyAnchors(_ pos: [UUID: SIMD3<Float>], session: String) {
+        var changed = false
+        if var c = cur.center, c.session == session, let a = c.anchor, let p = pos[a], simd_length(p - c.pos) > 0.03 {
+            c.x = p.x; c.y = p.y; c.z = p.z
+            cur.center = c
+            anchoredAt[a] = p
+            changed = true
+        }
+        for i in cur.trees.indices where cur.trees[i].session == session {
+            let t = cur.trees[i]
+            guard let a = t.anchor, let p = pos[a], simd_length(p - SIMD3(t.x, t.y, t.z)) > 0.03 else { continue }
+            cur.trees[i].x = p.x; cur.trees[i].y = p.y; cur.trees[i].z = p.z
+            anchoredAt[a] = p
+            changed = true
+        }
+        guard changed, let c = center(session: session) else { return }
+        for i in cur.trees.indices where cur.trees[i].session == session {
+            let d = Double(simd_length(SIMD2(cur.trees[i].x, cur.trees[i].z) - c.xz))
+            cur.trees[i].dist = d
+            if cur.trees[i].manual != true { cur.trees[i].counted = d <= SampleArea.radius }
+        }
+        saveCur()
+    }
+
     private let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     private var plotsURL: URL { dir.appendingPathComponent("parauglaukumi.json") }
     private var curURL: URL { dir.appendingPathComponent("parauglaukums.json") }
@@ -243,6 +313,7 @@ final class SamplePlotModel: ObservableObject {
     }
 
     private func saveCur() {
+        syncAnchors()
         if let d = try? JSONEncoder().encode(cur) { try? d.write(to: curURL, options: .atomic) }
     }
 
@@ -434,6 +505,7 @@ final class SamplePlotModel: ObservableObject {
     func toggle(_ id: UUID) {
         guard let i = cur.trees.firstIndex(where: { $0.id == id }) else { return }
         cur.trees[i].counted.toggle()
+        cur.trees[i].manual = true
         saveCur()
     }
 
@@ -774,6 +846,12 @@ struct PlotPanel: View {
         .onAppear {
             m.diameterOnly = true
             m.resetTree()
+            let meas = m
+            sp.addAnchor = { meas.addAnchor(at: $0) }
+            sp.removeAnchor = { meas.removeAnchor($0) }
+            sp.currentSession = { meas.sessionID }
+            sp.applyAnchors(m.anchorPositions, session: m.sessionID)
+            sp.ensureAnchors()
             redraw()
         }
         .onDisappear {
@@ -785,6 +863,7 @@ struct PlotPanel: View {
         .onChange(of: m.diameterCount) { treeMeasured() }
         .onChange(of: m.heightCount) { heightMeasured() }
         .onChange(of: m.trackingHiccups) { if center != nil { trackingDisturbed = true } }
+        .onChange(of: m.anchorTick) { sp.applyAnchors(m.anchorPositions, session: m.sessionID) }
     }
 
     private func dialogsA<V: View>(_ v: V) -> some View {

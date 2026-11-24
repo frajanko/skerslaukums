@@ -162,6 +162,9 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         guard let s = arView?.session else { return }
         let cfg = s.configuration ?? ARWorldTrackingConfiguration()
         s.run(cfg, options: [.resetTracking, .removeExistingAnchors])
+        plotAnchors = [:]
+        anchorPositions = [:]
+        q.async { self.anchorPosQ = [:] }
         sessionID = UUID().uuidString
         resetTree()
     }
@@ -192,6 +195,50 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
             stepCapture(snap, frame)
         } else if liveFrame {
             updateLive(snap, frame)
+        }
+    }
+
+    // MARK: - ARKit enkuri (parauglaukuma centrs un koki)
+
+    private var plotAnchors: [UUID: ARAnchor] = [:]          // galvenajā pavedienā
+    /// Enkuru pēdējās pozīcijas (galvenajā pavedienā); `anchorTick` palielinās, kad ARKit kādu pārvieto.
+    private(set) var anchorPositions: [UUID: SIMD3<Float>] = [:]
+    @Published private(set) var anchorTick = 0
+    private var anchorPosQ: [UUID: SIMD3<Float>] = [:]       // rindā q
+    private static let anchorName = "plot"
+
+    func addAnchor(at p: SIMD3<Float>) -> UUID? {
+        guard let s = arView?.session else { return nil }
+        var t = matrix_identity_float4x4
+        t.columns.3 = SIMD4(p.x, p.y, p.z, 1)
+        let a = ARAnchor(name: Self.anchorName, transform: t)
+        s.add(anchor: a)
+        plotAnchors[a.identifier] = a
+        anchorPositions[a.identifier] = p
+        q.async { self.anchorPosQ[a.identifier] = p }
+        return a.identifier
+    }
+
+    func removeAnchor(_ id: UUID) {
+        if let a = plotAnchors.removeValue(forKey: id) { arView?.session.remove(anchor: a) }
+        anchorPositions[id] = nil
+        q.async { self.anchorPosQ[id] = nil }
+    }
+
+    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+        // rindā q; ziņo tikai par būtiskām (> 2 cm) izmaiņām
+        var moved: [(UUID, SIMD3<Float>)] = []
+        for a in anchors where a.name == Self.anchorName {
+            let p = SIMD3(a.transform.columns.3.x, a.transform.columns.3.y, a.transform.columns.3.z)
+            if let o = anchorPosQ[a.identifier], simd_length(o - p) < 0.02 { continue }
+            guard anchorPosQ[a.identifier] != nil else { continue }
+            anchorPosQ[a.identifier] = p
+            moved.append((a.identifier, p))
+        }
+        guard !moved.isEmpty else { return }
+        DispatchQueue.main.async {
+            for (id, p) in moved where self.plotAnchors[id] != nil { self.anchorPositions[id] = p }
+            self.anchorTick += 1
         }
     }
 

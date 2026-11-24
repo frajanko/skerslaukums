@@ -65,6 +65,8 @@ lineāra interpolācija). Sugai bez modeļkokiem lieto audzes H (rezultāts atz�
 Nobīde: AR izsekošana mežā aizpeld (lauka testā 4,5 m). Lietotne atgādina pārbaudīt centru ik pēc 6 kokiem vai pēc
 izsekošanas traucējuma; ja nobīde Δ > 15 cm, var labot: k-tā no m kopš pārbaudes izmērītajiem kokiem pozīcija
 p += Δ·(1 − k/(m+1)), attālums no centra pārrēķināts; centrs pārcelts uz mietiņa novērojumu.
+Centram un kokiem ir ARAnchor; kad ARKit tos pārvieto (kartes precizēšana, cilpas aizvēršana), pozīcijas un
+attālumi no centra tiek pārrēķināti (ar roku mainītu ieskaitīšanu nemaina).
 Ja AR izsekošana tiek atiestatīta (vai lietotne aizvērta), centru atzīmē no jauna uz tā paša mietiņa un pārmēra vienu
 jau izmērītu koku: no tā vektora no centra vecajā un jaunajā sistēmā aprēķina pagriezienu ap vertikāli un pārnes
 visus iepriekšējās sesijas kokus (dublikātu atpazīšana un AR gredzeni atkal strādā).
