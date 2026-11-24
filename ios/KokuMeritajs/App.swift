@@ -8,6 +8,7 @@ struct KokuMeritajsApp: App {
     @StateObject private var measurer = Measurer()
     @StateObject private var basal = BasalModel()
     @StateObject private var location = LocationProvider()
+    @StateObject private var samples = SamplePlotModel()
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -23,6 +24,7 @@ struct KokuMeritajsApp: App {
             .environmentObject(measurer)
             .environmentObject(basal)
             .environmentObject(location)
+            .environmentObject(samples)
             .preferredColorScheme(.dark)
             .onAppear {
                 UIApplication.shared.isIdleTimerDisabled = true
@@ -122,6 +124,8 @@ struct RootView: View {
                 if isBasal {
                     PrismWindow(pose: m.pose)
                     BasalPanel()
+                } else if tab == "plot" {
+                    PlotPanel()
                 } else {
                     TreePanel()
                 }
@@ -138,7 +142,7 @@ struct RootView: View {
         .onReceive(m.pose.$heading) { h in
             if let h, let p = m.pose.pitch { basal.markCoverage(heading: h, pitch: p) }
         }
-        .sheet(isPresented: $showData) { DataView(tab: isBasal ? "plots" : "trees") }
+        .sheet(isPresented: $showData) { DataView(tab: isBasal ? "plots" : (tab == "plot" ? "samples" : "trees")) }
         .sheet(isPresented: $showHelp) { HelpView() }
     }
 
@@ -153,6 +157,7 @@ struct RootView: View {
             Picker("Režīms", selection: $tab) {
                 Text("Šķērslaukums").tag("basal")
                 Text("Koki").tag("trees")
+                Text("Paraugl.").tag("plot")
             }
             .pickerStyle(.segmented)
             .disabled(m.busy)
@@ -327,16 +332,6 @@ struct TreePanel: View {
         m.resetTree()
         Haptics.tap()
     }
-
-    private func valueBox(_ title: String, _ value: String) -> some View {
-        VStack(spacing: 0) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.title3.bold().monospacedDigit())
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 4)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-    }
 }
 
 // MARK: - Dati: laukumi un koki
@@ -345,6 +340,7 @@ struct DataView: View {
     @EnvironmentObject var store: TreeStore
     @EnvironmentObject var basal: BasalModel
     @EnvironmentObject var m: Measurer
+    @EnvironmentObject var samples: SamplePlotModel
     @Environment(\.dismiss) private var dismiss
     @AppStorage("stand") private var stand = ""
     @State var tab: String
@@ -370,7 +366,22 @@ struct DataView: View {
     }
 
     private var isPlots: Bool { tab == "plots" }
-    private var isEmpty: Bool { isPlots ? basal.plots.isEmpty : store.trees.isEmpty }
+    private var isSamples: Bool { tab == "samples" }
+    private var isEmpty: Bool {
+        isPlots ? basal.plots.isEmpty : (isSamples ? samples.plots.isEmpty : store.trees.isEmpty)
+    }
+    private var countText: String {
+        isPlots ? "\(basal.plots.count) laukumus" : (isSamples ? "\(samples.plots.count) parauglaukumus" : "\(store.trees.count) kokus")
+    }
+
+    private func exportURLs() -> [URL] {
+        if isPlots { return [writeTemp("skerslaukums", basal.csv())].compactMap { $0 } }
+        if isSamples {
+            return [writeTemp("parauglaukumi", samples.csvSummary()),
+                    writeTemp("parauglaukumi_koki", samples.csvTrees())].compactMap { $0 }
+        }
+        return [writeTemp("koki", store.csv())].compactMap { $0 }
+    }
 
     var body: some View {
         NavigationStack {
@@ -378,24 +389,25 @@ struct DataView: View {
                 Section("Nogabals") {
                     TextField("piem. 12-5", text: $stand)
                 }
-                if isPlots { plotSections } else { treeSections }
+                if isPlots { plotSections } else if isSamples { sampleSections } else { treeSections }
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Gatavs") { dismiss() } }
                 ToolbarItem(placement: .principal) {
                     Picker("Dati", selection: $tab) {
-                        Text("Laukumi").tag("plots")
+                        Text("Šķērsl.").tag("plots")
+                        Text("Paraugl.").tag("samples")
                         Text("Koki").tag("trees")
                     }
                     .pickerStyle(.segmented)
-                    .frame(width: 200)
+                    .frame(width: 250)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
-                            let url = isPlots ? writeTemp("skerslaukums", basal.csv()) : writeTemp("koki", store.csv())
-                            share = url.map { ShareItem(url: $0) }
+                            let urls = exportURLs()
+                            share = urls.isEmpty ? nil : ShareItem(urls: urls)
                         } label: { Label("Eksportēt CSV", systemImage: "square.and.arrow.up") }
                             .disabled(isEmpty)
                         Button(role: .destructive) { confirmClear = true } label: { Label("Dzēst visus", systemImage: "trash") }
@@ -405,13 +417,13 @@ struct DataView: View {
                     } label: { Image(systemName: "ellipsis.circle") }
                 }
             }
-            .confirmationDialog(isPlots ? "Dzēst visus \(basal.plots.count) laukumus?" : "Dzēst visus \(store.trees.count) kokus?",
+            .confirmationDialog("Dzēst visus \(countText)?",
                                 isPresented: $confirmClear, titleVisibility: .visible) {
                 Button("Dzēst visus", role: .destructive) {
-                    if isPlots { basal.deleteAll() } else { store.deleteAll() }
+                    if isPlots { basal.deleteAll() } else if isSamples { samples.deleteAll() } else { store.deleteAll() }
                 }
             }
-            .sheet(item: $share) { s in ShareSheet(items: [s.url]) }
+            .sheet(item: $share) { s in ShareSheet(items: s.urls) }
         }
     }
 
@@ -449,6 +461,40 @@ struct DataView: View {
                 }
             } header: {
                 Text("Nogabals \(g.id.isEmpty ? "—" : g.id)")
+            }
+        }
+    }
+
+    @ViewBuilder private var sampleSections: some View {
+        if samples.plots.isEmpty {
+            Section { Text("Vēl nav saglabātu parauglaukumu. Cilnē „Paraugl.” atzīmē centru, izmēri kokus un saglabā laukumu.").foregroundStyle(.secondary) }
+        }
+        ForEach(samples.standGroups) { g in
+            Section {
+                SummaryRows(s: g.summary, ci: Calc.stats(g.plots.map { $0.summary.gHa }))
+                ForEach(g.plots) { p in
+                    let s = p.summary
+                    NavigationLink {
+                        SamplePlotDetail(plot: p)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text("Nr. \(p.no) · \(s.n) koki").font(.subheadline.bold())
+                                Text(p.date.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            VStack(alignment: .trailing) {
+                                Text("G \(fmt(s.gHa, 1))").bold().monospacedDigit()
+                                Text("Dg \(s.dg.map { fmt($0, 1) } ?? "—") · \(s.composition)").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .swipeActions {
+                        Button("Dzēst", role: .destructive) { samples.delete(p.id) }
+                    }
+                }
+            } header: {
+                Text("Nogabals \(g.id.isEmpty ? "—" : g.id) · R \(fmt(SampleArea.radius, 2)) m")
             }
         }
     }
@@ -491,7 +537,7 @@ struct DataView: View {
 
 struct ShareItem: Identifiable {
     let id = UUID()
-    let url: URL
+    let urls: [URL]
 }
 
 struct ShareSheet: UIViewControllerRepresentable {
@@ -527,6 +573,14 @@ struct HelpView: View {
                         Text("**Augstums.** Atkāpies tik tālu, lai redzi galotni (attālums ≈ koka augstums ir labākais). Telefons pats seko, cik tālu esi aizgājis. Notēmē galotni un spied „Atzīmēt galotni”. Augstumu skaita no zemes, ko pieņem 1,3 m zem caurmēra mērīšanas vietas.")
                         Text("**Tikai caurmēri.** Ieslēdz „Tikai D” — augstumu nemēra, un katrs izmērītais caurmērs uzreiz tiek saglabāts ar izvēlēto sugu. Ar ↶ atsauc pēdējo saglabāto koku.")
                         Text("Izvēlies sugu un spied ⤓, lai saglabātu koku. Sarakstā (augšā pa labi) — laukumi, koki, kopsavilkums un CSV eksports.")
+                    }
+                    Group {
+                        Text("Parauglaukums").font(.title3.bold())
+                        Text("Apļveida laukums ar rādiusu **12,62 m** (500 m²). Iesprauž mietiņu laukuma centrā, tēmē uz tā pamatni un spied „Atzīmēt centru”. AR skatā parādās oranža robeža — gredzens pie zemes un 1,3 m augstumā, ar mietiņiem ik 15°.")
+                        Text("Ej no koka pie koka un mēri caurmērus (izvēlies sugu pirms mērīšanas). Kamēr tēmē, redzams stumbra attālums no centra. Izmērītos stumbrus apņem gredzens: **zaļš** — ieskaitīts, **dzeltens** — robežkoks (±30 cm), **pelēks** — ārpus laukuma. Ja to pašu koku izmēri vēlreiz, mērījums tiek aizstāts.")
+                        Text("Attālumu mēra horizontāli līdz stumbra asij, tāpēc slīpumā korekcija nav vajadzīga. AR izsekošana ejot nedaudz „aizpeld”: atgriezies pie mietiņa un ⋯ → „Pārbaudīt centra nobīdi”. Ja nobīde liela, robežkokus pārbaudi ar mērlenti un sarakstā pieskaries kokam, lai to ieskaitītu vai izslēgtu.")
+                        Text("Sarakstā (☰ ar numuriem) — laukuma rādītāji: N/ha, G m²/ha, D̄, Dg, sastāvs. „Saglabāt laukumu” — un nākamais laukums. Datu sarakstā — nogabala vidējie rādītāji no visiem laukumiem un CSV eksports.")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
                     Group {
                         Text("Padomi").font(.headline)

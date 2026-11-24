@@ -46,6 +46,13 @@ Slīpums un apgrieziena aplis nāk no AR izsekošanas (kompass nav vajadzīgs).
 **Tikai D** — režīms tikai caurmēru mērīšanai (bez augstuma): katrs izmērītais caurmērs uzreiz tiek saglabāts
 ar izvēlēto sugu, ↶ atsauc pēdējo saglabāto koku.
 
+**Paraugl.** — apļveida parauglaukums ar R = 12,62 m (500 m²). Tēmē uz centra mietiņa pamatni → „Atzīmēt centru”;
+AR skatā parādās laukuma robeža. Mērot caurmērus, katram kokam aprēķina horizontālo attālumu no centra līdz stumbra
+asij (ARKit koordinātas) — iekšā / robežkoks (±30 cm, pārbaudīt ar mērlenti) / ārā. Atkārtoti mērīts koks tiek aizstāts.
+Rādītāji: N/ha, G m²/ha, D̄, Dg, sastāvs; nogabalam — vidējie no visiem laukumiem ar 95 % ticamības intervālu G.
+CSV: kopsavilkums pa laukumiem + visi koki. Ja AR izsekošana tiek atiestatīta, centrs jāatzīmē no jauna (izmērītie
+koki un to attālumi saglabājas).
+
 Saglabātie koki (nogabals, nr., suga, D, H) → saraksts ar kopsavilkumu pa sugām → CSV (Excel, `;`).
 
 **Būvēšana** — Mac nav vajadzīgs. Katrs `ios/` izmaiņu push uz `main` palaiž GitHub Actions

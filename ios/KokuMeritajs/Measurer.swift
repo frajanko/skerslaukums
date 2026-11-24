@@ -70,6 +70,13 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
     @Published var diameterCount = 0
     /// „Tikai caurmēri”: pēc caurmēra nepāriet uz augstumu.
     var diameterOnly = false
+    /// AR koordinātu sistēmas identifikators: mainās, startējot lietotni un atiestatot izsekošanu.
+    /// Saglabātās AR pozīcijas der tikai tajā pašā sesijā.
+    @Published private(set) var sessionID = UUID().uuidString
+    /// Parauglaukuma centrs (X, Z) — dzīvajos rādījumos rāda attālumu no tā.
+    var plotCenter: SIMD2<Float>? = nil {
+        didSet { let c = plotCenter; q.async { self.plotCenterQ = c } }
+    }
     let pose = Pose()
 
     /// Koku režīms ieslēgts. Šķērslaukuma režīmā LiDAR stumbra meklēšana nav vajadzīga.
@@ -85,11 +92,13 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
     static let breastHeight: Float = 1.3
 
     private let q = DispatchQueue(label: "koku.ar", qos: .userInitiated)
-    private weak var arView: ARView?
+    private(set) weak var arView: ARView?
+    var plotAnchor: AnchorEntity? = nil
 
     // Stāvoklis, kuru lieto tikai rindā `q`:
     private var modeQ: Mode = .diameter
     private var activeQ = true
+    private var plotCenterQ: SIMD2<Float>? = nil
     private var treeQ = TreeMeasure()
     private var last: DepthSnapshot? = nil
     private var frameNo = 0
@@ -130,6 +139,7 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         guard let s = arView?.session else { return }
         let cfg = s.configuration ?? ARWorldTrackingConfiguration()
         s.run(cfg, options: [.resetTracking, .removeExistingAnchors])
+        sessionID = UUID().uuidString
         resetTree()
     }
 
@@ -218,7 +228,8 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
                 info.detail = "Ieteicamais attālums 1–3 m"
                 break
             }
-            if let sl = TrunkSlicer.slice(s, y0: aim.y, aim: aim), let d = sl.edgeDiameter, let ec = sl.edgeCenter {
+            let slice = TrunkSlicer.slice(s, y0: aim.y, aim: aim)
+            if let sl = slice, let d = sl.edgeDiameter, let ec = sl.edgeCenter {
                 info.main = "≈ \(fmt(d * 100, 1)) cm"
                 info.good = dist >= 0.5 && dist <= 3.5
                 let cam = SIMD2(Double(s.camPos.x), Double(s.camPos.z))
@@ -230,6 +241,12 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
                 info.main = "Stumbrs nav atrasts"
             }
             info.detail = "Tēmē stumbra vidū 1,3 m augstumā · attālums \(fmt(dist, 1)) m"
+            if let pc = plotCenterQ {
+                let tc = slice?.edgeCenter.map { SIMD2(Float($0.x), Float($0.y)) }
+                    ?? SIMD2(aim.x, aim.z)
+                let r = Double(simd_length(tc - pc))
+                info.detail += "\nno centra \(fmt(r, 1)) m — " + SampleArea.status(r).title
+            }
 
         case .height:
             guard let axis = treeQ.axisXZ, let ry = groundY() else {
@@ -340,6 +357,13 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
                 axis = c.edgeC.reduce(SIMD2<Double>(0, 0), +) / Double(c.edgeC.count)
             }
         }
+        if axis == nil, let D = d, let s = last {
+            // Rezerve: tēmēšanas punkts + rādiuss prom no kameras.
+            let a = SIMD2(Double(c.aim.x), Double(c.aim.z))
+            let v = a - SIMD2(Double(s.camPos.x), Double(s.camPos.z))
+            let n = simd_length(v)
+            axis = n > 1e-3 ? a + v / n * D / 2 : a
+        }
 
         guard let D = d else {
             DispatchQueue.main.async {
@@ -402,6 +426,14 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
+    /// Punkts, uz kuru pašlaik tēmē (LiDAR), un kameras pozīcija — galvenajā pavedienā.
+    func aimNow(_ done: @escaping (SIMD3<Float>?, SIMD3<Float>?) -> Void) {
+        q.async {
+            let p = self.last?.aimPoint(), c = self.last?.camPos
+            DispatchQueue.main.async { done(p, c) }
+        }
+    }
+
     func resetTree() {
         q.async {
             self.treeQ = TreeMeasure()
@@ -429,7 +461,7 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
     private var liveAnchor: AnchorEntity? = nil
     private var liveLines: [ModelEntity] = []
 
-    private static func mat(_ c: UIColor, _ o: Float) -> UnlitMaterial {
+    static func mat(_ c: UIColor, _ o: Float) -> UnlitMaterial {
         var m = UnlitMaterial(color: c)
         m.blending = .transparent(opacity: .init(scale: o))
         return m
