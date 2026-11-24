@@ -28,6 +28,9 @@ struct LiveInfo {
     var warning: String? = nil
     /// Stumbrs, uz kuru pašlaik tēmē (ass X, Z) — lai parauglaukumā zinātu, kurš koks tas ir.
     var trunkXZ: SIMD2<Float>? = nil
+    /// Tēmēšanas augstums pie šī stumbra (pasaules Y) un dzīvais caurmērs, cm.
+    var trunkY: Float? = nil
+    var trunkDcm: Double? = nil
 }
 
 /// Pašreizējā koka mērījumi.
@@ -147,6 +150,10 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
             cfg.frameSemantics.insert(.smoothedSceneDepth)
         }
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            // Nelīdzinātais dziļums — dzīvajām līnijām (izlīdzinātais kustībā atpaliek → līnijas nobīdās).
+            cfg.frameSemantics.insert(.sceneDepth)
+        }
         s.run(cfg)
     }
 
@@ -172,7 +179,8 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
 
-        guard let snap = DepthSnapshot(frame: frame) else {
+        let liveFrame = capture == nil && frameNo % 6 == 0
+        guard let snap = DepthSnapshot(frame: frame, raw: liveFrame) else {
             if frameNo % 30 == 0 {
                 publishLive(LiveInfo(main: "Nav LiDAR datu", detail: "", good: false, warning: nil))
             }
@@ -182,7 +190,7 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
 
         if capture != nil {
             stepCapture(snap, frame)
-        } else if frameNo % 6 == 0 {
+        } else if liveFrame {
             updateLive(snap, frame)
         }
     }
@@ -279,6 +287,8 @@ final class Measurer: NSObject, ObservableObject, ARSessionDelegate {
             if let f = found {
                 let (ec, d) = f
                 info.trunkXZ = SIMD2(Float(ec.x), Float(ec.y))
+                info.trunkY = aim.y
+                info.trunkDcm = d * 100
                 info.main = "≈ \(fmt(d * 100, 1)) cm"
                 info.good = dist >= 0.5 && dist <= 3.5
                 let cam = SIMD2(Double(s.camPos.x), Double(s.camPos.z))

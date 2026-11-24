@@ -11,8 +11,10 @@ struct DepthSnapshot {
     let T: simd_float4x4    // kamera → pasaule
     let tracking: ARCamera.TrackingState
 
-    init?(frame: ARFrame) {
-        guard let sd = frame.smoothedSceneDepth ?? frame.sceneDepth else { return nil }
+    /// `raw` — nelīdzināts dziļums (bez laika aizkaves, kustībā neatpaliek); citādi — izlīdzināts.
+    init?(frame: ARFrame, raw: Bool = false) {
+        let pick = raw ? (frame.sceneDepth ?? frame.smoothedSceneDepth) : (frame.smoothedSceneDepth ?? frame.sceneDepth)
+        guard let sd = pick else { return nil }
         let dm = sd.depthMap
         CVPixelBufferLockBaseAddress(dm, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(dm, .readOnly) }
@@ -267,7 +269,7 @@ enum ImageEdges {
         /// Malas meklēšana: LiDAR mala parasti ir stumbra iekšpusē, tāpēc ārpusē meklē tālāk (15 %),
         /// iekšpusē maz (5 %) — lai mizas rievas netiek uzskatītas par malu.
         func edge(at e: Int, outward: Int) -> Int? {
-            let out = Int(0.15 * len), inn = Int(0.05 * len)
+            let out = Int(0.18 * len), inn = Int(0.06 * len)
             let a = outward < 0 ? e - out : e - inn
             let b = outward < 0 ? e + inn : e + out
             let lo = max(3, a), hi = min(count - 4, b)

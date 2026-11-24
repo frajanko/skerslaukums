@@ -377,6 +377,15 @@ final class SamplePlotModel: ObservableObject {
         return Recovery(tree: cur.trees[i], moved: moved, rotDeg: deg, dr: abs(d - old.dist))
     }
 
+    /// Koka AR pozīciju atjauno pēc tā, kur stumbrs redzams tagad (AR izsekošana laukumā „aizpeld”).
+    /// Attālums no centra (`dist`) un ieskaitīšana nemainās — tie noteikti, mērot caurmēru.
+    func updatePosition(_ id: UUID, pos: SIMD3<Float>, session: String) {
+        guard let i = cur.trees.firstIndex(where: { $0.id == id }) else { return }
+        cur.trees[i].x = pos.x; cur.trees[i].y = pos.y; cur.trees[i].z = pos.z
+        cur.trees[i].session = session
+        saveCur()
+    }
+
     func setHeight(_ id: UUID, h: Double?, dist: Double?) {
         guard let i = cur.trees.firstIndex(where: { $0.id == id }) else { return }
         cur.trees[i].hM = h
@@ -615,16 +624,31 @@ struct PlotPanel: View {
     }
     private var inHeights: Bool { phase == .heights && pending != .recover }
 
-    /// Jau izmērīts koks, uz kuru pašlaik tēmē (pēc LiDAR atrastās stumbra ass).
-    private var aimedTree: PlotTree? {
-        guard let a = m.live.trunkXZ, !m.busy else { return nil }
-        let near = sp.cur.trees
-            .filter { $0.session == m.sessionID }
-            .map { ($0, simd_length(SIMD2($0.x, $0.z) - a)) }
-            .min { $0.1 < $1.1 }
-        guard let (t, d) = near, d < max(0.25, Float(t.dCm / 200) + 0.1) else { return nil }
-        return t
+    /// Koki, kas varētu būt stumbrs, uz kuru tēmē: pēc AR pozīcijas un caurmēra līdzības.
+    /// AR izsekošana, ejot pa laukumu, „aizpeld” (līdz ~1 m), tāpēc pozīcija vien nepietiek.
+    private func candidates() -> [(tree: PlotTree, gap: Float, score: Double)] {
+        guard let a = m.live.trunkXZ else { return [] }
+        let dLive = m.live.trunkDcm
+        return sp.cur.trees.map { t -> (tree: PlotTree, gap: Float, score: Double) in
+            let gap: Float = t.session == m.sessionID ? simd_length(SIMD2(t.x, t.z) - a) : 99
+            var score = Double(min(gap, 5)) / 0.4
+            if let d = dLive { score += abs(t.dCm - d) / max(3, 0.1 * t.dCm) }
+            return (t, gap, score)
+        }
+        .sorted { $0.score < $1.score }
     }
+
+    /// Jau izmērīts koks, uz kuru pašlaik tēmē (ja to var droši atpazīt).
+    private var aimedTree: PlotTree? {
+        guard !m.busy, let best = candidates().first else { return nil }
+        let t = best.tree
+        let tol = max(0.4, Float(t.dCm / 200) + 0.2)
+        let dOK = m.live.trunkDcm.map { abs(t.dCm - $0) <= max(4, 0.2 * t.dCm) } ?? true
+        return best.gap <= tol && dOK ? t : nil
+    }
+
+    /// Ja koku neatpazīst — izvēle no tuvākajiem pēc pozīcijas / caurmēra.
+    @State private var pickAsk: [PlotTree]? = nil
 
     var body: some View {
         let sum = PlotSummary(counted, model: sp.cur.trees)
@@ -725,6 +749,19 @@ struct PlotPanel: View {
         } message: { r in
             Text("Izmērīts: D \(fmt(r.dCm, 1)) cm, \(fmt(r.r, 1)) m no centra")
         }
+        .confirmationDialog("Kurš koks tas ir?",
+                            isPresented: Binding(get: { pickAsk != nil }, set: { if !$0 { pickAsk = nil } }),
+                            titleVisibility: .visible, presenting: pickAsk) { list in
+            ForEach(list) { t in
+                Button("#\(t.no) \(Species.name(t.species)) · D \(fmt(t.dCm, 1)) · \(fmt(t.dist, 1)) m no centra"
+                       + (t.hM != nil ? " · H ir" : "")) {
+                    startHeight(t, live: true)
+                }
+            }
+            Button("Atcelt", role: .cancel) {}
+        } message: { _ in
+            Text("Pozīcija pēc AR nesakrīt pietiekami (izsekošana var būt aizpeldējusi). Izvēlies koku — augstumu mērīs stumbram, uz kuru tēmē tagad.")
+        }
         .sheet(isPresented: $showTrees) { PlotTreesView(onHeight: { t in phase = .heights; startHeight(t) }) }
         .confirmationDialog("Dzēst laukuma Nr. \(sp.cur.no) centru un \(sp.cur.trees.count) kokus?",
                             isPresented: $confirmDiscard, titleVisibility: .visible) {
@@ -783,7 +820,7 @@ struct PlotPanel: View {
                         Text("#\(t.no) \(Species.name(t.species))")
                             .font(.system(size: 28, weight: .bold, design: .rounded)).foregroundStyle(.cyan)
                     } else {
-                        Text(m.live.trunkXZ != nil ? "Koks nav izmērīts" : "Stumbrs nav atrasts")
+                        Text(m.live.trunkXZ != nil ? "Koks nav atpazīts" : "Stumbrs nav atrasts")
                             .font(.system(size: 24, weight: .bold, design: .rounded))
                     }
                 } else {
@@ -816,8 +853,8 @@ struct PlotPanel: View {
         if inHeights {
             guard let t = aimedTree else {
                 return m.live.trunkXZ != nil
-                    ? "Šim stumbram nav caurmēra — izmēri to posmā „1 Caurmēri”"
-                    : "Tēmē uz stumbra 1–3 m attālumā"
+                    ? "Spied „Mērīt augstumu” un izvēlies koku no saraksta\n(ja tam nav caurmēra — izmēri to posmā „1 Caurmēri”)"
+                    : "Tēmē uz stumbra 1,3 m augstumā, 1–3 m attālumā"
             }
             var s = "D \(fmt(t.dCm, 1)) cm · \(fmt(t.dist, 1)) m no centra"
             if let h = t.hM { s += " · jau izmērīts H \(fmt(h, 1)) m" }
@@ -867,11 +904,11 @@ struct PlotPanel: View {
             if inHeights && heightTree == nil {
                 // Augstumu posms: koks, uz kuru tēmē → mērīt tā augstumu.
                 if let t = aimedTree {
-                    startHeight(t)
+                    startHeight(t, live: true)
+                } else if m.live.trunkXZ != nil, !sp.cur.trees.isEmpty {
+                    pickAsk = Array(candidates().prefix(5).map(\.tree))
                 } else {
-                    m.message = m.live.trunkXZ != nil
-                        ? "Šim kokam nav caurmēra — vispirms izmēri to"
-                        : "Notēmē uz stumbra (1–3 m), kam jau izmērīts caurmērs"
+                    m.message = "Notēmē uz stumbra (1–3 m), kam jau izmērīts caurmērs"
                     Haptics.fail()
                 }
                 return
@@ -959,7 +996,17 @@ struct PlotPanel: View {
         m.message = s
     }
 
-    private func startHeight(_ t: PlotTree) {
+    /// `live` — augstumu mēra stumbram, uz kuru tēmē tagad (ass un 1,3 m augstums no LiDAR šobrīd),
+    /// nevis pēc saglabātās pozīcijas, kas var būt aizpeldējusi. Koka pozīciju arī atjauno.
+    private func startHeight(_ t: PlotTree, live: Bool = false) {
+        if live, let a = m.live.trunkXZ, let y = m.live.trunkY {
+            sp.updatePosition(t.id, pos: SIMD3(a.x, y, a.y), session: m.sessionID)
+            m.setHeightTarget(axis: a, dY: y)
+            pending = .height(t.id)
+            m.message = nil
+            Haptics.tap()
+            return
+        }
         guard t.session == m.sessionID else {
             m.message = "Kokam #\(t.no) nav AR pozīcijas — vispirms atjauno centru"
             Haptics.fail()
